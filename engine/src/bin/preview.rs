@@ -809,6 +809,99 @@ fn build_script_panel(editor: &Rc<Editor>) -> gtk::Box {
     page
 }
 
+fn show_export_dialog(editor: &Rc<Editor>, parent: Option<&gtk::Window>) {
+    let (project_json, base_dir, title) = {
+        let st = editor.state.borrow();
+        let Some(project) = st.project.as_ref() else { return };
+        (project.to_json(), editor.base_dir(), project.meta.title.clone())
+    };
+
+    let dialog = gtk::Window::builder()
+        .title("Export video")
+        .modal(true)
+        .default_width(420)
+        .build();
+    if let Some(parent) = parent {
+        dialog.set_transient_for(Some(parent));
+    }
+
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    content.set_margin_top(14);
+    content.set_margin_bottom(14);
+    content.set_margin_start(14);
+    content.set_margin_end(14);
+
+    let out_entry = gtk::Entry::new();
+    let default_name: String = title
+        .chars()
+        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+        .collect();
+    out_entry.set_text(&base_dir.join(format!("{default_name}.mp4")).display().to_string());
+    content.append(&gtk::Label::builder().label("Output file").halign(gtk::Align::Start).build());
+    content.append(&out_entry);
+
+    let profile = gtk::DropDown::from_strings(&["mp4 (H.264/AAC)", "webm (VP8/Vorbis)"]);
+    content.append(&gtk::Label::builder().label("Format").halign(gtk::Align::Start).build());
+    content.append(&profile);
+
+    let status = gtk::Label::new(None);
+    status.set_halign(gtk::Align::Start);
+    status.set_wrap(true);
+
+    let go = gtk::Button::with_label("Export");
+    go.add_css_class("suggested-action");
+    {
+        let status = status.clone();
+        let out_entry = out_entry.clone();
+        let profile = profile.clone();
+        go.connect_clicked(move |btn| {
+            let out = out_entry.text().to_string();
+            let prof = if profile.selected() == 1 { "webm" } else { "mp4" }.to_string();
+            btn.set_sensitive(false);
+            status.set_text("Rendering…");
+            let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
+            {
+                let project_json = project_json.clone();
+                let base_dir = base_dir.clone();
+                let out = out.clone();
+                std::thread::spawn(move || {
+                    let result =
+                        dualcut_engine::render_project(&project_json, &base_dir, &out, &prof)
+                            .map(|warnings| {
+                                for w in warnings {
+                                    eprintln!("warning: {w}");
+                                }
+                            })
+                            .map_err(|e| format!("{e:#}"));
+                    let _ = tx.send(result);
+                });
+            }
+            let status = status.clone();
+            let btn = btn.clone();
+            glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+                match rx.try_recv() {
+                    Ok(Ok(())) => {
+                        status.set_text(&format!("✓ exported {out}"));
+                        btn.set_sensitive(true);
+                        glib::ControlFlow::Break
+                    }
+                    Ok(Err(e)) => {
+                        status.set_text(&format!("✗ {e}"));
+                        btn.set_sensitive(true);
+                        glib::ControlFlow::Break
+                    }
+                    Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                    Err(_) => glib::ControlFlow::Break,
+                }
+            });
+        });
+    }
+    content.append(&go);
+    content.append(&status);
+    dialog.set_child(Some(&content));
+    dialog.present();
+}
+
 fn build_ui(app: &adw::Application) -> Result<()> {
     init()?;
     gstgtk4::plugin_register_static().context("registering gtk4paintablesink")?;
@@ -956,6 +1049,16 @@ fn build_ui(app: &adw::Application) -> Result<()> {
 
     let bar = adw::HeaderBar::new();
     bar.pack_start(&play);
+    let export = gtk::Button::from_icon_name("document-save-symbolic");
+    export.set_tooltip_text(Some("Export video"));
+    {
+        let editor = editor.clone();
+        export.connect_clicked(move |btn| {
+            let window = btn.root().and_downcast::<gtk::Window>();
+            show_export_dialog(&editor, window.as_ref());
+        });
+    }
+    bar.pack_start(&export);
     bar.pack_end(&time_label);
 
     let transport = gtk::Box::new(gtk::Orientation::Horizontal, 8);

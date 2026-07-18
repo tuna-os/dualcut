@@ -138,17 +138,7 @@ fn render_with_profile(
     out: &str,
     profile: &str,
 ) -> Result<Vec<String>> {
-    let compiled = mapping::compile(project, base_dir)?;
-    let pipeline = ges::Pipeline::new();
-    pipeline.set_timeline(&compiled.timeline).context("attaching timeline")?;
-    if let Some(parent) = std::path::Path::new(out).parent() {
-        std::fs::create_dir_all(parent).ok();
-    }
-    let out_abs = std::path::absolute(out)?;
-    pipeline.set_render_settings(&format!("file://{}", out_abs.display()), &encoding_profile(profile)?)?;
-    pipeline.set_mode(ges::PipelineFlags::RENDER)?;
-    run_to_eos(&pipeline)?;
-    Ok(compiled.warnings)
+    dualcut_engine::render_project(&project.to_json(), base_dir, out, profile)
 }
 
 #[cfg(feature = "scripting")]

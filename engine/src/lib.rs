@@ -119,6 +119,29 @@ pub fn mp4_profile() -> gst_pbutils::EncodingContainerProfile {
     .build()
 }
 
+/// Render a project document to a file. Self-contained (parses the JSON
+/// itself) so callers can run it on a worker thread — GES objects are not
+/// Send, so everything GStreamer stays inside this call.
+pub fn render_project(
+    project_json: &str,
+    base_dir: &std::path::Path,
+    out: &str,
+    profile: &str,
+) -> Result<Vec<String>> {
+    let project = document::Project::from_json(project_json)?;
+    let compiled = mapping::compile(&project, base_dir)?;
+    let pipeline = ges::Pipeline::new();
+    pipeline.set_timeline(&compiled.timeline).context("attaching timeline")?;
+    if let Some(parent) = std::path::Path::new(out).parent() {
+        std::fs::create_dir_all(parent).ok();
+    }
+    let out_abs = std::path::absolute(out)?;
+    pipeline.set_render_settings(&format!("file://{}", out_abs.display()), &encoding_profile(profile)?)?;
+    pipeline.set_mode(ges::PipelineFlags::RENDER)?;
+    run_to_eos(&pipeline)?;
+    Ok(compiled.warnings)
+}
+
 /// Run a pipeline until EOS or error, printing progress.
 pub fn run_to_eos(pipeline: &ges::Pipeline) -> Result<()> {
     let bus = pipeline.bus().context("pipeline has no bus")?;
