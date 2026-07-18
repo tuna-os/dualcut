@@ -10,12 +10,10 @@
 use crate::document::{parse_color, Anim, AnimProperty, Clip, Easing, Element, Project};
 use anyhow::{bail, Context, Result};
 use ges::prelude::*;
-use gst::prelude::*;
 use gstreamer as gst;
 use gstreamer_controller as gst_controller;
-use gst_controller::prelude::TimedValueControlSourceExt as _;
 use gstreamer_editing_services as ges;
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 fn secs(t: f64) -> gst::ClockTime {
     gst::ClockTime::from_useconds((t.max(0.0) * 1_000_000.0) as u64)
@@ -171,7 +169,7 @@ fn add_clip(
 }
 
 fn apply_transform_and_animations(
-    project: &Project,
+    _project: &Project,
     ges_clip: &ges::Clip,
     clip: &Clip,
     warnings: &mut Vec<String>,
@@ -295,7 +293,7 @@ fn ease(easing: Easing, t: f64) -> f64 {
     }
 }
 
-fn substitute(clip: &Clip, args: &HashMap<String, String>) -> Clip {
+fn substitute(clip: &Clip, args: &BTreeMap<String, String>) -> Clip {
     let mut clip = clip.clone();
     let apply = |s: &mut String| {
         for (k, v) in args {

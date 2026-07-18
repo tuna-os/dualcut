@@ -6,14 +6,14 @@
 
 use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::BTreeMap;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub meta: Meta,
     /// Reusable compositions, instantiated by `Layer::CompRef`.
     #[serde(default)]
-    pub defs: HashMap<String, CompDef>,
+    pub defs: BTreeMap<String, CompDef>,
     /// Sequential scenes; order defines time. No gaps.
     pub scenes: Vec<Scene>,
     /// Composition-spanning tracks (subtitles, music, watermarks) with
@@ -117,7 +117,7 @@ pub enum Element {
     CompRef {
         r#ref: String,
         #[serde(default)]
-        args: HashMap<String, String>,
+        args: BTreeMap<String, String>,
     },
     /// Built-in test pattern (useful for scripts/tests).
     Test {},
@@ -252,7 +252,7 @@ impl Project {
 }
 
 impl Clip {
-    fn validate(&self, defs: &HashMap<String, CompDef>) -> Result<()> {
+    fn validate(&self, defs: &BTreeMap<String, CompDef>) -> Result<()> {
         if self.start < 0.0 || self.duration < 0.0 {
             bail!("clip {:?}: start/duration must be >= 0", self.id);
         }
@@ -291,5 +291,160 @@ pub fn parse_color(color: &str) -> u32 {
         0xff00_0000 | value
     } else {
         value
+    }
+}
+
+/// Find a clip anywhere in the project by id.
+pub fn find_clip<'a>(project: &'a Project, id: &str) -> Option<&'a Clip> {
+    project
+        .scenes
+        .iter()
+        .flat_map(|s| s.layers.iter())
+        .chain(project.overlays.iter().flat_map(|t| t.clips.iter()))
+        .find(|c| c.id == id)
+}
+
+pub fn find_clip_mut<'a>(project: &'a mut Project, id: &str) -> Option<&'a mut Clip> {
+    let in_scene = project
+        .scenes
+        .iter_mut()
+        .flat_map(|s| s.layers.iter_mut())
+        .find(|c| c.id == id);
+    if in_scene.is_some() {
+        return in_scene;
+    }
+    project
+        .overlays
+        .iter_mut()
+        .flat_map(|t| t.clips.iter_mut())
+        .find(|c| c.id == id)
+}
+
+pub fn remove_clip(project: &mut Project, id: &str) {
+    for scene in &mut project.scenes {
+        scene.layers.retain(|c| c.id != id);
+    }
+    for track in &mut project.overlays {
+        track.clips.retain(|c| c.id != id);
+    }
+}
+
+/// The classic editor op: silence a video clip's embedded audio and give it
+/// an independent audio clip on the "detached-audio" overlay track.
+/// Returns the new clip's id.
+pub fn detach_audio(project: &mut Project, id: &str) -> Option<String> {
+    let (src, offset, volume, start, duration) = {
+        let clip = find_clip(project, id)?;
+        match &clip.element {
+            Element::Video { src, offset, volume } => {
+                (src.clone(), *offset, *volume, clip.start, clip.duration)
+            }
+            _ => return None,
+        }
+    };
+    // Scene clips are scene-relative; the detached audio lives on an
+    // overlay track, which is absolutely timed.
+    let abs_start = project
+        .scenes
+        .iter()
+        .enumerate()
+        .find(|(_, s)| s.layers.iter().any(|c| c.id == id))
+        .map(|(i, _)| project.scene_offset(i) + start)
+        .unwrap_or(start);
+    if let Some(clip) = find_clip_mut(project, id) {
+        if let Element::Video { volume, .. } = &mut clip.element {
+            *volume = 0.0;
+        }
+    }
+    let new_id = format!("{id}-audio");
+    let audio = Clip {
+        id: new_id.clone(),
+        start: abs_start,
+        duration,
+        element: Element::Audio { src, offset, volume },
+        transform: Default::default(),
+        animations: Vec::new(),
+    };
+    if let Some(track) = project.overlays.iter_mut().find(|t| t.id == "detached-audio") {
+        track.clips.push(audio);
+    } else {
+        project.overlays.push(OverlayTrack {
+            id: "detached-audio".into(),
+            name: "Detached audio".into(),
+            clips: vec![audio],
+        });
+    }
+    Some(new_id)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn demo() -> Project {
+        Project::from_json(include_str!("../examples/demo-project.json")).unwrap()
+    }
+
+    #[test]
+    fn parses_and_validates_demo() {
+        let p = demo();
+        assert_eq!(p.scenes.len(), 2);
+        assert_eq!(p.duration(), 7.0);
+        assert_eq!(p.scene_offset(1), 3.0);
+    }
+
+    #[test]
+    fn roundtrips_json() {
+        let p = demo();
+        let p2 = Project::from_json(&p.to_json()).unwrap();
+        assert_eq!(p.to_json(), p2.to_json());
+    }
+
+    #[test]
+    fn rejects_duplicate_ids() {
+        let mut p = demo();
+        let clip = p.scenes[0].layers[0].clone();
+        p.scenes[0].layers.push(clip);
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn rejects_unknown_def_ref() {
+        let mut p = demo();
+        if let Some(c) = find_clip_mut(&mut p, "media-lower-third") {
+            c.element = Element::CompRef { r#ref: "nope".into(), args: Default::default() };
+        }
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn detach_audio_silences_video_and_adds_overlay_clip() {
+        let mut p = demo();
+        let new_id = detach_audio(&mut p, "media-ball").expect("detaches");
+        // Video muted.
+        match &find_clip(&p, "media-ball").unwrap().element {
+            Element::Video { volume, .. } => assert_eq!(*volume, 0.0),
+            _ => panic!("still a video clip"),
+        }
+        // Audio clip exists on the detached-audio overlay with absolute time
+        // (scene-media starts at 3.0, clip start 0 -> abs 3.0).
+        let audio = find_clip(&p, &new_id).unwrap();
+        assert_eq!(audio.start, 3.0);
+        assert!(matches!(audio.element, Element::Audio { .. }));
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn remove_clip_removes_everywhere() {
+        let mut p = demo();
+        remove_clip(&mut p, "wm-text");
+        assert!(find_clip(&p, "wm-text").is_none());
+        assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn parse_color_handles_rgb_and_argb() {
+        assert_eq!(parse_color("#ffffff"), 0xffffffff);
+        assert_eq!(parse_color("#80ffffff"), 0x80ffffff);
     }
 }
