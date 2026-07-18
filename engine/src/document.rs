@@ -411,6 +411,33 @@ pub fn detach_audio(project: &mut Project, id: &str) -> Option<String> {
     Some(new_id)
 }
 
+/// Save the given clips as a reusable def named `name` (clips stay in
+/// place; the def gets copies with starts normalized so the earliest is 0).
+pub fn save_as_def(project: &mut Project, ids: &[String], name: &str) -> Result<()> {
+    if name.is_empty() {
+        bail!("template name must not be empty");
+    }
+    if project.defs.contains_key(name) {
+        bail!("a def named {name:?} already exists");
+    }
+    let mut clips: Vec<Clip> = ids
+        .iter()
+        .filter_map(|id| find_clip(project, id).cloned())
+        .collect();
+    if clips.is_empty() {
+        bail!("no clips selected");
+    }
+    if clips.iter().any(|c| matches!(c.element, Element::CompRef { .. })) {
+        bail!("templates cannot contain template instances (defs cannot nest)");
+    }
+    let min_start = clips.iter().map(|c| c.start).fold(f64::INFINITY, f64::min);
+    for clip in &mut clips {
+        clip.start -= min_start;
+    }
+    project.defs.insert(name.to_string(), CompDef { params: Vec::new(), layers: clips });
+    project.validate()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -485,6 +512,26 @@ mod tests {
         assert!(p.validate().is_ok());
         p.scenes[1].transition = Some(Transition { kind: TransitionKind::Crossfade, duration: 5.0 });
         assert!(p.validate().is_err()); // longer than the scene itself
+    }
+
+    #[test]
+    fn save_as_def_normalizes_and_validates() {
+        let mut p = demo();
+        save_as_def(
+            &mut p,
+            &["intro-title".into(), "wm-text".into()],
+            "my-template",
+        )
+        .unwrap();
+        let def = &p.defs["my-template"];
+        assert_eq!(def.layers.len(), 2);
+        // earliest start normalized to 0 (intro-title 0.4, wm-text 0.5)
+        assert_eq!(def.layers.iter().map(|c| c.start).fold(f64::INFINITY, f64::min), 0.0);
+        assert!(p.validate().is_ok());
+        // duplicate name refused
+        assert!(save_as_def(&mut p, &["intro-bg".into()], "my-template").is_err());
+        // compref content refused
+        assert!(save_as_def(&mut p, &["media-lower-third".into()], "t2").is_err());
     }
 
     #[test]

@@ -12,7 +12,7 @@
 
 use anyhow::{Context, Result};
 use dualcut_engine::{build_demo_timeline, document, document::Project, init, mapping};
-use document::{detach_audio, find_clip, find_clip_mut, remove_clip};
+use document::{detach_audio, find_clip, find_clip_mut, remove_clip, save_as_def};
 use ges::prelude::*;
 use gstreamer as gst;
 use gstreamer_editing_services as ges;
@@ -411,7 +411,8 @@ impl Editor {
         scroll.set_min_content_height(160);
         uiref.inspector.append(&scroll);
 
-        // Multi-select delete (Ctrl/Shift-click rows, then delete them all).
+        // Multi-select ops (Ctrl/Shift-click rows first).
+        let sel_ops = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         let del_sel = gtk::Button::with_label("Delete selected");
         {
             let this = self.clone();
@@ -431,7 +432,38 @@ impl Editor {
                 this.commit_document(project);
             });
         }
-        uiref.inspector.append(&del_sel);
+        sel_ops.append(&del_sel);
+
+        let tpl_name = gtk::Entry::new();
+        tpl_name.set_placeholder_text(Some("template name"));
+        tpl_name.set_hexpand(true);
+        let save_tpl = gtk::Button::with_label("Save as template");
+        {
+            let this = self.clone();
+            let list = list.clone();
+            let ids: Vec<String> = entries.iter().map(|(_, id)| id.clone()).collect();
+            let project_snapshot = project.clone();
+            let tpl_name = tpl_name.clone();
+            save_tpl.connect_clicked(move |_| {
+                let selected: Vec<String> = list
+                    .selected_rows()
+                    .iter()
+                    .map(|r| ids[r.index() as usize].clone())
+                    .collect();
+                let name = tpl_name.text().to_string();
+                let mut project = project_snapshot.clone();
+                match save_as_def(&mut project, &selected, &name) {
+                    Ok(()) => {
+                        println!("saved template {name:?} ({} clips)", selected.len());
+                        this.commit_document(project);
+                    }
+                    Err(e) => eprintln!("save template: {e}"),
+                }
+            });
+        }
+        sel_ops.append(&tpl_name);
+        sel_ops.append(&save_tpl);
+        uiref.inspector.append(&sel_ops);
 
         // Editor form for the selected clip.
         let Some(selected) = selected else { return };
