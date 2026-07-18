@@ -155,3 +155,16 @@ must exist in `defs`; defs cannot (yet) reference other defs. Audio policy:
 a video clip's own audio is scene-local; music/VO belongs on overlays.
 "Detach audio" = set the video clip's `volume: 0` and add an `audio` clip
 with the same `src`/`offset` wherever you want it.
+
+## Shapes (M3)
+
+`shape` clips render on the GPU (Vello) when the engine is built with the
+`vector` feature: rect, circle, ellipse, star, polygon, line, arrow, with
+`fill` (#rrggbb/#aarrggbb) and size from `transform.width/height`.
+Rasters cache under `<project dir>/.dualcut-cache/`.
+
+## Scripting (M4)
+
+`POST /script` with a TypeScript body: `export function edit(p: Project): Project`.
+Runs in-process, result validated and saved. Types: `engine/schema/dualcut.d.ts`;
+JSON Schema: `engine/schema/dualcut.schema.json`.

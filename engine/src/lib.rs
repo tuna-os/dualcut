@@ -15,6 +15,8 @@ use gstreamer_editing_services as ges;
 pub mod document;
 pub mod mapping;
 pub mod templates;
+#[cfg(feature = "vector")]
+pub mod vector;
 
 pub fn init() -> Result<()> {
     gst::init().context("initializing GStreamer")?;

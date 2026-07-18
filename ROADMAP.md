@@ -117,14 +117,28 @@ Project
   with the v0 web prototype, but native.
 - **M3 — Shapes & motion.** Vector layer types, animation editor, scene
   transitions, transform handles in the preview.
+  *Status: shapes + transitions done (2026-07-18) — all seven shape kinds
+  render via Vello to cached transparent PNGs entering GES as image clips
+  (feature "vector"); scene crossfades via GES auto-transition. Remaining:
+  in-app animation editor, transform handles, live vector morphs.*
 - **M4 — Scripting.** Embedded TS runtime + script panel, typed `editor.*`
   API, `.d.ts`/JSON Schema publishing, agent recipes.
+  *Status: core done (2026-07-18) — POST /script runs TS
+  (`export function edit(p: Project): Project`) in-process, validated;
+  `schema/dualcut.d.ts` + `dualcut.schema.json` published. Remaining:
+  in-app script panel, V8 offline source for the Flatpak bundle.*
 - **M5 — Templates.** `defs`/`comp-ref` with params, "save selection as
   template", a small built-in template library (lower third, title card,
   caption style).
+  *Status: library done (2026-07-18) — starter defs (lower-third,
+  title-card, caption) embedded; `render new <path> [title]` scaffolds.
+  Remaining: "save selection as template" UI op.*
 - **M6 — Export & polish.** Render queue (GES render profiles: MP4/WebM,
   resolution/bitrate presets), audio gain/fades, waveforms + thumbnails on
   clips, snapping, multi-select.
+  *Status: profiles done (2026-07-18) — MP4 (H.264/AAC) and WebM
+  (VP8/Vorbis) by name or extension, CLI + /render. Remaining: queue UI,
+  bitrate presets, waveforms/thumbnails, snapping, multi-select.*
 - **M7 — Flatpak & Flathub.** The shipping artifact: finish the manifest
   (GNOME runtime, rust-stable SDK extension, `flatpak-cargo-generator`
   offline sources, GES module if the runtime lacks it), portals for media

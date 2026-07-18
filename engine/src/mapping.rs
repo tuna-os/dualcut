@@ -172,12 +172,35 @@ fn add_clip(
             layer.add_clip(&test)?;
             Some(test.upcast())
         }
-        Element::Shape { shape, .. } => {
-            warnings.push(format!(
-                "clip {:?}: shape {:?} skipped (Vello compositor lands in M3)",
-                clip.id, shape
-            ));
-            None
+        Element::Shape { shape, fill } => {
+            #[cfg(feature = "vector")]
+            {
+                let w = if clip.transform.width > 0.0 { clip.transform.width } else { 200.0 } as u32;
+                let h = if clip.transform.height > 0.0 { clip.transform.height } else { 200.0 } as u32;
+                let cache = base_dir.join(".dualcut-cache");
+                match crate::vector::shape_png(&cache, *shape, fill, w, h) {
+                    Ok(png) => {
+                        let uri = format!("file://{}", png.canonicalize()?.display());
+                        let media = ges::UriClip::new(&uri).context("shape image clip")?;
+                        media.set_start(start);
+                        media.set_duration(duration);
+                        layer.add_clip(&media)?;
+                        Some(media.upcast())
+                    }
+                    Err(e) => {
+                        warnings.push(format!("clip {:?}: shape render failed: {e}", clip.id));
+                        None
+                    }
+                }
+            }
+            #[cfg(not(feature = "vector"))]
+            {
+                warnings.push(format!(
+                    "clip {:?}: shape {:?} needs the \"vector\" feature",
+                    clip.id, shape
+                ));
+                None
+            }
         }
         Element::CompRef { r#ref, args } => {
             let def = project.defs.get(r#ref).expect("validated");

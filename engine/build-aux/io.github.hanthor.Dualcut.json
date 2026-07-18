@@ -51,7 +51,7 @@
       "name": "dualcut",
       "buildsystem": "simple",
       "build-commands": [
-        "cargo --offline build --release --features preview --bin preview",
+        "cargo --offline build --release --features preview,vector --bin preview",
         "install -Dm755 target/release/preview /app/bin/dualcut",
         "install -Dm644 build-aux/io.github.hanthor.Dualcut.desktop /app/share/applications/io.github.hanthor.Dualcut.desktop",
         "install -Dm644 build-aux/io.github.hanthor.Dualcut.metainfo.xml /app/share/metainfo/io.github.hanthor.Dualcut.metainfo.xml",
