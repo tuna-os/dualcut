@@ -9,7 +9,7 @@
 //! Usage: serve <project.json> [port]     (default port 7357)
 
 use anyhow::{Context, Result};
-use dualcut_engine::{document::Project, init, mapping, mp4_profile, run_to_eos};
+use dualcut_engine::{document::Project, encoding_profile, init, mapping, run_to_eos};
 use ges::prelude::*;
 use gstreamer_editing_services as ges;
 use std::io::Read;
@@ -70,12 +70,13 @@ fn main() -> Result<()> {
                 Err(e) => json_response(400, format!(r#"{{"error":{:?}}}"#, e.to_string())),
             },
             (Method::Post, "/render") => {
-                let out: String = serde_json::from_str::<serde_json::Value>(&body)
-                    .ok()
-                    .and_then(|v| v["out"].as_str().map(String::from))
-                    .unwrap_or_else(|| "out/render.mp4".into());
+                let req: serde_json::Value =
+                    serde_json::from_str(&body).unwrap_or(serde_json::Value::Null);
+                let out: String = req["out"].as_str().unwrap_or("out/render.mp4").into();
+                let profile = req["profile"].as_str().unwrap_or(&out).to_string();
+                let _ = &profile;
                 let project = state.lock().unwrap().project.clone();
-                match render(&project, &base_dir, &out) {
+                match render_with_profile(&project, &base_dir, &out, &profile) {
                     Ok(warnings) => json_response(
                         200,
                         serde_json::json!({ "ok": true, "out": out, "warnings": warnings })
@@ -105,7 +106,13 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-fn render(project: &Project, base_dir: &std::path::Path, out: &str) -> Result<Vec<String>> {
+
+fn render_with_profile(
+    project: &Project,
+    base_dir: &std::path::Path,
+    out: &str,
+    profile: &str,
+) -> Result<Vec<String>> {
     let compiled = mapping::compile(project, base_dir)?;
     let pipeline = ges::Pipeline::new();
     pipeline.set_timeline(&compiled.timeline).context("attaching timeline")?;
@@ -113,7 +120,7 @@ fn render(project: &Project, base_dir: &std::path::Path, out: &str) -> Result<Ve
         std::fs::create_dir_all(parent).ok();
     }
     let out_abs = std::path::absolute(out)?;
-    pipeline.set_render_settings(&format!("file://{}", out_abs.display()), &mp4_profile())?;
+    pipeline.set_render_settings(&format!("file://{}", out_abs.display()), &encoding_profile(profile)?)?;
     pipeline.set_mode(ges::PipelineFlags::RENDER)?;
     run_to_eos(&pipeline)?;
     Ok(compiled.warnings)

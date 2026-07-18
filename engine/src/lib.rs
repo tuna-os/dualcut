@@ -14,6 +14,7 @@ use gstreamer_editing_services as ges;
 
 pub mod document;
 pub mod mapping;
+pub mod templates;
 
 pub fn init() -> Result<()> {
     gst::init().context("initializing GStreamer")?;
@@ -60,6 +61,33 @@ pub fn build_demo_timeline(media_uri: Option<&str>) -> Result<ges::Timeline> {
 
     timeline.commit_sync();
     Ok(timeline)
+}
+
+/// Pick an encoding profile by name or output-file extension.
+/// Supported: "mp4" (H.264+AAC), "webm" (VP8+Vorbis).
+pub fn encoding_profile(name: &str) -> anyhow::Result<gst_pbutils::EncodingContainerProfile> {
+    match name.rsplit('.').next().unwrap_or(name) {
+        "mp4" | "h264" => Ok(mp4_profile()),
+        "webm" | "vp8" => Ok(webm_profile()),
+        other => anyhow::bail!("unknown encoding profile {other:?} (use mp4 or webm)"),
+    }
+}
+
+/// WebM (VP8 + Vorbis) profile.
+pub fn webm_profile() -> gst_pbutils::EncodingContainerProfile {
+    let video = gst_pbutils::EncodingVideoProfile::builder(
+        &gst::Caps::builder("video/x-vp8").build(),
+    )
+    .build();
+    let audio = gst_pbutils::EncodingAudioProfile::builder(
+        &gst::Caps::builder("audio/x-vorbis").build(),
+    )
+    .build();
+    gst_pbutils::EncodingContainerProfile::builder(&gst::Caps::builder("video/webm").build())
+        .name("dualcut-webm")
+        .add_profile(video)
+        .add_profile(audio)
+        .build()
 }
 
 /// MP4 (H.264 + AAC) encoding profile for `ges::Pipeline::set_render_settings`.

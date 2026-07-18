@@ -1,0 +1,144 @@
+{
+  "lower-third": {
+    "params": [
+      "name",
+      "role"
+    ],
+    "layers": [
+      {
+        "id": "lt-bar",
+        "start": 0,
+        "duration": 0,
+        "type": "text",
+        "text": "{name}",
+        "font": "Sans Bold 26",
+        "color": "#ffffff",
+        "transform": {
+          "x": 80,
+          "y": 590
+        },
+        "animations": [
+          {
+            "property": "opacity",
+            "from": 0,
+            "to": 1,
+            "start": 0,
+            "end": 0.35,
+            "easing": "easeOut"
+          },
+          {
+            "property": "x",
+            "from": 40,
+            "to": 80,
+            "start": 0,
+            "end": 0.35,
+            "easing": "easeOut"
+          }
+        ]
+      },
+      {
+        "id": "lt-role",
+        "start": 0.15,
+        "duration": 0,
+        "type": "text",
+        "text": "{role}",
+        "font": "Sans 18",
+        "color": "#9aa7c7",
+        "transform": {
+          "x": 82,
+          "y": 632
+        },
+        "animations": [
+          {
+            "property": "opacity",
+            "from": 0,
+            "to": 1,
+            "start": 0,
+            "end": 0.35,
+            "easing": "easeOut"
+          }
+        ]
+      }
+    ]
+  },
+  "title-card": {
+    "params": [
+      "title",
+      "subtitle"
+    ],
+    "layers": [
+      {
+        "id": "tc-title",
+        "start": 0,
+        "duration": 0,
+        "type": "text",
+        "text": "{title}",
+        "font": "Sans Bold 56",
+        "color": "#f4f6fb",
+        "animations": [
+          {
+            "property": "opacity",
+            "from": 0,
+            "to": 1,
+            "start": 0,
+            "end": 0.5,
+            "easing": "easeOut"
+          }
+        ]
+      },
+      {
+        "id": "tc-subtitle",
+        "start": 0.3,
+        "duration": 0,
+        "type": "text",
+        "text": "{subtitle}",
+        "font": "Sans 24",
+        "color": "#8ea2ff",
+        "transform": {
+          "x": 0,
+          "y": 420
+        },
+        "animations": [
+          {
+            "property": "opacity",
+            "from": 0,
+            "to": 1,
+            "start": 0,
+            "end": 0.5,
+            "easing": "easeOut"
+          }
+        ]
+      }
+    ]
+  },
+  "caption": {
+    "params": [
+      "text"
+    ],
+    "layers": [
+      {
+        "id": "cap-text",
+        "start": 0,
+        "duration": 0,
+        "type": "text",
+        "text": "{text}",
+        "font": "Sans Semi-Bold 24",
+        "color": "#ffffff",
+        "transform": {
+          "x": 0,
+          "y": 620
+        },
+        "animations": [
+          {
+            "property": "opacity",
+            "from": 0,
+            "to": 1,
+            "start": 0,
+            "end": 0.2,
+            "easing": "easeOut"
+          }
+        ]
+      }
+    ]
+  }
+}

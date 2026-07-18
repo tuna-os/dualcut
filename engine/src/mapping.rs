@@ -45,15 +45,44 @@ pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled
         }
     }
 
-    let max_scene_layers = project.scenes.iter().map(|s| s.layers.len()).max().unwrap_or(0);
+    // Each "slot" (an overlay track, or a scene-layer index) gets as many
+    // GES layers as its deepest def expansion needs: multi-layer defs put
+    // each def layer on its own GES layer (same-layer full overlaps are
+    // invalid in GES).
+    let slot_depth = |clips: &[Clip]| -> usize {
+        clips
+            .iter()
+            .map(|c| match &c.element {
+                Element::CompRef { r#ref, .. } => {
+                    project.defs.get(r#ref).map_or(1, |d| d.layers.len().max(1))
+                }
+                _ => 1,
+            })
+            .max()
+            .unwrap_or(1)
+    };
+
+    let mut slots: Vec<Vec<ges::Layer>> = Vec::new();
     let overlay_count = project.overlays.len();
-    let total_layers = overlay_count + max_scene_layers.max(1);
-    let ges_layers: Vec<ges::Layer> = (0..total_layers).map(|_| timeline.append_layer()).collect();
+    for track in &project.overlays {
+        let depth = slot_depth(&track.clips);
+        slots.push((0..depth).map(|_| timeline.append_layer()).collect());
+    }
+    let max_scene_layers = project.scenes.iter().map(|s| s.layers.len()).max().unwrap_or(0);
+    for li in 0..max_scene_layers.max(1) {
+        let depth = project
+            .scenes
+            .iter()
+            .filter_map(|s| s.layers.get(li).map(|c| slot_depth(std::slice::from_ref(c))))
+            .max()
+            .unwrap_or(1);
+        slots.push((0..depth).map(|_| timeline.append_layer()).collect());
+    }
 
     // Overlay tracks first (top of the stack), absolute timing.
     for (i, track) in project.overlays.iter().enumerate() {
         for clip in &track.clips {
-            add_clip(project, &ges_layers[i], clip, 0.0, base_dir, &mut warnings)
+            add_clip(project, &slots[i], clip, 0.0, base_dir, &mut warnings)
                 .with_context(|| format!("overlay clip {:?}", clip.id))?;
         }
     }
@@ -66,7 +95,7 @@ pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled
             if clip.duration <= 0.0 {
                 clip.duration = (scene.duration - clip.start).max(0.1);
             }
-            add_clip(project, &ges_layers[overlay_count + li], &clip, offset, base_dir, &mut warnings)
+            add_clip(project, &slots[overlay_count + li], &clip, offset, base_dir, &mut warnings)
                 .with_context(|| format!("scene {:?} clip {:?}", scene.id, clip.id))?;
         }
     }
@@ -77,12 +106,13 @@ pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled
 
 fn add_clip(
     project: &Project,
-    layer: &ges::Layer,
+    slot: &[ges::Layer],
     clip: &Clip,
     offset: f64,
     base_dir: &std::path::Path,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    let layer = &slot[0];
     let start = secs(offset + clip.start);
     let duration = secs(if clip.duration > 0.0 { clip.duration } else { 1.0 });
 
@@ -151,14 +181,16 @@ fn add_clip(
         }
         Element::CompRef { r#ref, args } => {
             let def = project.defs.get(r#ref).expect("validated");
-            for sub in &def.layers {
+            for (di, sub) in def.layers.iter().enumerate() {
                 let mut sub = substitute(sub, args);
                 sub.id = format!("{}/{}", clip.id, sub.id);
                 sub.start += clip.start;
                 if sub.duration <= 0.0 {
                     sub.duration = clip.duration - (sub.start - clip.start);
                 }
-                add_clip(project, layer, &sub, offset, base_dir, warnings)
+                // Each def layer gets its own GES layer within the slot.
+                let sub_slot = &slot[di.min(slot.len() - 1)..];
+                add_clip(project, sub_slot, &sub, offset, base_dir, warnings)
                     .with_context(|| format!("def {:?} layer {:?}", r#ref, sub.id))?;
             }
             None

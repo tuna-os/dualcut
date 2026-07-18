@@ -5,7 +5,7 @@
 //!   render <output.mp4> [media-uri]        render the built-in M0 demo
 
 use anyhow::{Context, Result};
-use dualcut_engine::{build_demo_timeline, init, mp4_profile, run_to_eos};
+use dualcut_engine::{build_demo_timeline, encoding_profile, init, run_to_eos};
 use dualcut_engine::{document::Project, mapping};
 use ges::prelude::*;
 use gstreamer as gst;
@@ -16,6 +16,16 @@ fn main() -> Result<()> {
 
     let mut args = std::env::args().skip(1);
     let first = args.next().unwrap_or_else(|| "out.mp4".into());
+
+    // `render new <project.json> [title]` scaffolds a starter project.
+    if first == "new" {
+        let path = args.next().unwrap_or_else(|| "project.json".into());
+        let title = args.next().unwrap_or_else(|| "Untitled".into());
+        let project = dualcut_engine::templates::new_project(&title);
+        std::fs::write(&path, project.to_json()).with_context(|| format!("writing {path}"))?;
+        println!("scaffolded {path} ({title:?}, {} starter templates)", project.defs.len());
+        return Ok(());
+    }
 
     let (timeline, out) = if first.ends_with(".json") {
         let out = args.next().unwrap_or_else(|| "out.mp4".into());
@@ -48,7 +58,7 @@ fn main() -> Result<()> {
     let out_abs = std::path::absolute(&out)?;
     let uri = format!("file://{}", out_abs.display());
     pipeline
-        .set_render_settings(&uri, &mp4_profile())
+        .set_render_settings(&uri, &encoding_profile(&out)?)
         .context("setting render settings")?;
     pipeline
         .set_mode(ges::PipelineFlags::RENDER)
