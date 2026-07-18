@@ -1,0 +1,30 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body, #root { height: 100%; }
+body {
+  font-family: Inter, system-ui, -apple-system, sans-serif;
+  background: #0e1016;
+  color: #d7dce8;
+  font-size: 13px;
+  overflow: hidden;
+}
+button {
+  font: inherit;
+  color: inherit;
+  background: #1c2130;
+  border: 1px solid #2a3145;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover:not(:disabled) { background: #242b3f; }
+button:disabled { opacity: 0.4; cursor: default; }
+input, select, textarea {
+  font: inherit;
+  color: inherit;
+  background: #141824;
+  border: 1px solid #2a3145;
+  border-radius: 5px;
+  padding: 3px 6px;
+  width: 100%;
+}
+input:focus, select:focus, textarea:focus { outline: 1px solid #5468ff; }

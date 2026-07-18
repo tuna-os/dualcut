@@ -1,0 +1,189 @@
+.app { display: flex; flex-direction: column; height: 100%; }
+.main { display: flex; flex: 1; min-height: 0; }
+.center { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.spacer { flex: 1; }
+
+/* ── Top bar ─────────────────────────────────────────── */
+.topbar {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 14px;
+  background: #12151f;
+  border-bottom: 1px solid #232a3d;
+}
+.logo { font-weight: 700; color: #8ea2ff; letter-spacing: 0.5px; }
+.title { color: #8b93a7; }
+.transport { display: flex; align-items: center; gap: 8px; }
+.transport .play { width: 44px; font-size: 15px; }
+.timecode { font-variant-numeric: tabular-nums; color: #aab3c7; min-width: 130px; }
+.sync { font-size: 12px; }
+.sync-saved { color: #5dd39e; }
+.sync-saving { color: #e9c46a; }
+.sync-offline { color: #e76f51; }
+
+/* ── Preview ─────────────────────────────────────────── */
+.preview-outer {
+  flex: 1; min-height: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: #090b10;
+  overflow: hidden;
+  position: relative;
+}
+.preview-stage {
+  position: relative;
+  overflow: hidden;
+  flex-shrink: 0;
+  box-shadow: 0 0 0 1px #232a3d, 0 12px 40px rgba(0,0,0,0.5);
+}
+
+/* ── Timeline ────────────────────────────────────────── */
+.timeline {
+  height: 240px;
+  display: flex; flex-direction: column;
+  background: #10131c;
+  border-top: 1px solid #232a3d;
+}
+.timeline-toolbar {
+  display: flex; align-items: center; gap: 6px;
+  padding: 6px 10px;
+  border-bottom: 1px solid #1c2130;
+}
+.zoom-label { color: #6b7488; font-size: 11px; min-width: 56px; text-align: center; }
+.timeline-scroll { flex: 1; overflow: auto; }
+.timeline-inner { display: flex; min-height: 100%; }
+.track-headers {
+  position: sticky; left: 0; z-index: 5;
+  width: 160px; flex-shrink: 0;
+  background: #12151f;
+  border-right: 1px solid #232a3d;
+}
+.track-header {
+  display: flex; align-items: center; gap: 4px;
+  padding: 0 8px;
+  border-bottom: 1px solid #1a1f2e;
+}
+.track-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+button.mini {
+  padding: 1px 5px; font-size: 11px;
+  background: transparent; border-color: transparent;
+}
+button.mini:hover { border-color: #2a3145; }
+button.mini.off { opacity: 0.45; }
+button.mini.danger:hover { color: #e76f51; }
+.lanes-column { position: relative; }
+.ruler {
+  position: relative;
+  border-bottom: 1px solid #232a3d;
+  background: #12151f;
+  cursor: ew-resize;
+  user-select: none;
+}
+.ruler .tick {
+  position: absolute; top: 4px;
+  font-size: 10px; color: #5b6478;
+  border-left: 1px solid #2a3145;
+  padding-left: 4px;
+  height: 100%;
+  pointer-events: none;
+}
+.lanes { position: relative; }
+.lane {
+  position: relative;
+  border-bottom: 1px solid #1a1f2e;
+  background:
+    repeating-linear-gradient(to right, transparent 0 79px, #161b28 79px 80px);
+}
+.clip-block {
+  position: absolute; top: 5px; bottom: 5px;
+  border-radius: 5px;
+  display: flex; align-items: center;
+  overflow: hidden;
+  cursor: grab;
+  user-select: none;
+  border: 1px solid rgba(255,255,255,0.12);
+}
+.clip-block.selected { outline: 2px solid #8ea2ff; }
+.clip-label {
+  padding: 0 8px;
+  font-size: 11px; color: #eef1f8;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  pointer-events: none;
+}
+.clip-text  { background: #3d4a8f; }
+.clip-shape { background: #2f6f5c; }
+.clip-image { background: #7a5c2f; }
+.clip-video { background: #7a3d55; }
+.clip-audio { background: #386478; }
+.clip-handle {
+  position: absolute; top: 0; bottom: 0; width: 7px;
+  cursor: ew-resize; z-index: 2;
+}
+.clip-handle.left { left: 0; }
+.clip-handle.right { right: 0; }
+.clip-handle:hover { background: rgba(255,255,255,0.25); }
+.playhead {
+  position: absolute; bottom: 0; width: 0;
+  border-left: 2px solid #ff5470;
+  z-index: 4;
+  pointer-events: none;
+}
+.playhead::before {
+  content: '';
+  position: absolute; top: 0; left: -6px;
+  border: 5px solid transparent;
+  border-top: 7px solid #ff5470;
+}
+
+/* ── Sidebar ─────────────────────────────────────────── */
+.sidebar {
+  width: 340px; flex-shrink: 0;
+  display: flex; flex-direction: column;
+  background: #12151f;
+  border-left: 1px solid #232a3d;
+  min-height: 0;
+}
+.tabs { display: flex; border-bottom: 1px solid #232a3d; }
+.tabs button {
+  flex: 1; border: none; border-radius: 0;
+  background: transparent; padding: 9px;
+  color: #6b7488;
+}
+.tabs button.active { color: #d7dce8; box-shadow: inset 0 -2px 0 #5468ff; }
+
+.inspector { flex: 1; overflow-y: auto; padding: 12px; }
+.inspector h3 { font-size: 13px; margin-bottom: 8px; }
+.inspector h4 {
+  font-size: 11px; text-transform: uppercase; letter-spacing: 0.8px;
+  color: #6b7488; margin: 14px 0 6px;
+}
+.inspector-head { display: flex; align-items: center; gap: 4px; margin-bottom: 8px; }
+.inspector-head h3 { flex: 1; margin: 0; }
+.fields { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+.field { display: flex; flex-direction: column; gap: 2px; }
+.field > span { font-size: 10px; color: #6b7488; }
+.field-wide { grid-column: 1 / -1; }
+.field input[type='color'] { padding: 1px; height: 26px; }
+.add-buttons { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.hint { color: #5b6478; margin-top: 14px; line-height: 1.5; }
+.anim-list { display: flex; flex-direction: column; gap: 8px; }
+.anim-row {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr) auto;
+  gap: 4px; align-items: end;
+  background: #161b28;
+  border: 1px solid #1f2637;
+  border-radius: 6px;
+  padding: 6px;
+}
+.anim-row .field > span { font-size: 9px; }
+.anim-row input, .anim-row select { padding: 2px 3px; font-size: 11px; min-width: 0; }
+
+/* ── Code panel ──────────────────────────────────────── */
+.code-panel { flex: 1; display: flex; flex-direction: column; min-height: 0; }
+.code-status {
+  padding: 6px 10px; font-size: 11px;
+  border-bottom: 1px solid #232a3d;
+}
+.code-status.ok { color: #5dd39e; }
+.code-status.error { color: #e76f51; }
+.code-panel .cm-editor { height: 100%; }
+.code-panel > div:last-child { flex: 1; min-height: 0; overflow: auto; }

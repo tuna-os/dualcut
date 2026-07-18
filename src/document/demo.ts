@@ -1,0 +1,100 @@
+import type { Composition } from './types';
+
+export const demoComposition: Composition = {
+  meta: {
+    title: 'Untitled project',
+    width: 1280,
+    height: 720,
+    fps: 30,
+    duration: 10,
+    background: '#0b0d12',
+  },
+  tracks: [
+    {
+      id: 'track-text',
+      name: 'Text',
+      clips: [
+        {
+          id: 'clip-title',
+          name: 'Title',
+          start: 0.5,
+          duration: 4,
+          x: 140,
+          y: 260,
+          width: 1000,
+          height: 120,
+          element: {
+            type: 'text',
+            text: 'Edit me in the timeline, the sidebar, or the code panel',
+            fontSize: 52,
+            color: '#f4f6fb',
+            fontWeight: 700,
+            align: 'center',
+          },
+          animations: [
+            { property: 'opacity', from: 0, to: 1, start: 0, end: 0.6, easing: 'easeOut' },
+            { property: 'y', from: 300, to: 260, start: 0, end: 0.6, easing: 'easeOut' },
+            { property: 'opacity', from: 1, to: 0, start: 3.4, end: 4, easing: 'easeIn' },
+          ],
+        },
+        {
+          id: 'clip-subtitle',
+          name: 'Subtitle',
+          start: 5,
+          duration: 4.5,
+          x: 240,
+          y: 320,
+          width: 800,
+          height: 80,
+          element: {
+            type: 'text',
+            text: 'One document, three ways to edit it',
+            fontSize: 40,
+            color: '#8ea2ff',
+            fontWeight: 500,
+            align: 'center',
+          },
+          animations: [
+            { property: 'opacity', from: 0, to: 1, start: 0, end: 0.5, easing: 'easeOut' },
+            { property: 'scale', from: 0.85, to: 1, start: 0, end: 0.7, easing: 'spring' },
+          ],
+        },
+      ],
+    },
+    {
+      id: 'track-graphics',
+      name: 'Graphics',
+      clips: [
+        {
+          id: 'clip-blob',
+          name: 'Accent circle',
+          start: 0,
+          duration: 10,
+          x: 940,
+          y: 80,
+          width: 260,
+          height: 260,
+          opacity: 0.5,
+          element: { type: 'shape', shape: 'ellipse', fill: '#5468ff' },
+          animations: [
+            { property: 'y', from: 80, to: 140, start: 0, end: 10, easing: 'easeInOut' },
+          ],
+        },
+        {
+          id: 'clip-bar',
+          name: 'Lower bar',
+          start: 1,
+          duration: 8,
+          x: 0,
+          y: 640,
+          width: 1280,
+          height: 8,
+          element: { type: 'shape', shape: 'rect', fill: '#2a3350' },
+          animations: [
+            { property: 'x', from: -1280, to: 0, start: 0, end: 1.2, easing: 'easeOut' },
+          ],
+        },
+      ],
+    },
+  ],
+};
