@@ -1,8 +1,8 @@
 {
-  "//": "Starter Flatpak manifest — the deliverable is a Flatpak (GNOME/libadwaita app).",
-  "//2": "Before first build: generate cargo-sources.json with flatpak-cargo-generator ",
-  "//3": "(https://github.com/flatpak/flatpak-builder-tools/tree/master/cargo) and verify",
-  "//4": "whether the GNOME runtime's GStreamer ships GES; if not, add a gst-editing-services module.",
+  "//": "Flatpak manifest — the deliverable. Built in CI by .github/workflows/flatpak.yml,",
+  "//2": "which generates cargo-sources.json with flatpak-cargo-generator before building.",
+  "//3": "Ships the preview feature only for now; scripting (V8) needs an offline",
+  "//4": "RUSTY_V8_ARCHIVE source and joins the bundle at M4.",
   "id": "io.github.hanthor.Dualcut",
   "runtime": "org.gnome.Platform",
   "runtime-version": "48",
@@ -15,6 +15,7 @@
     "--socket=pulseaudio",
     "--device=dri",
     "--share=ipc",
+    "--env=GST_PLUGIN_PATH=/app/lib/gstreamer-1.0",
     "--filesystem=xdg-videos:ro",
     "--filesystem=xdg-pictures:ro",
     "--filesystem=xdg-music:ro"
@@ -27,10 +28,28 @@
   },
   "modules": [
     {
+      "name": "gst-editing-services",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Ddoc=disabled",
+        "-Dtests=disabled",
+        "-Dexamples=disabled",
+        "-Dintrospection=disabled",
+        "-Dvalidate=disabled"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://gstreamer.freedesktop.org/src/gst-editing-services/gst-editing-services-1.24.2.tar.xz",
+          "sha256": "7201778ea5d937440c53d7439dd12aa5ac6840688af1f0499852275074b99073"
+        }
+      ]
+    },
+    {
       "name": "dualcut",
       "buildsystem": "simple",
       "build-commands": [
-        "cargo --offline build --release --features preview,scripting,vector",
+        "cargo --offline build --release --features preview --bin preview",
         "install -Dm755 target/release/preview /app/bin/dualcut"
       ],
       "sources": [
@@ -38,11 +57,7 @@
           "type": "dir",
           "path": ".."
         },
-        {
-          "type": "file",
-          "path": "cargo-sources.json",
-          "//": "generate with flatpak-cargo-generator ../Cargo.lock -o cargo-sources.json"
-        }
+        "cargo-sources.json"
       ]
     }
   ]
