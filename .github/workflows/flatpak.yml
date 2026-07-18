@@ -28,7 +28,7 @@ jobs:
             -o engine/build-aux/cargo-sources.json
 
       - name: Build bundle
-        uses: flathub-infra/flatpak-github-actions/flatpak-builder@v6
+        uses: flathub-infra/flatpak-github-actions/flatpak-builder@v6.7
         with:
           bundle: dualcut.flatpak
           manifest-path: engine/build-aux/io.github.hanthor.Dualcut.json
