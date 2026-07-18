@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.5.0" date="2026-07-18">
+      <description>
+        <p>Preview transform handles (click-select, drag-move), full lane timeline: scene-layer lanes, drag with snapping, edge trim.</p>
+      </description>
+    </release>
     <release version="0.4.0" date="2026-07-18">
       <description>
         <p>Timeline drag with snapping, scene reorder, waveforms, animation editor, export dialog, save-as-template, native-first README.</p>
