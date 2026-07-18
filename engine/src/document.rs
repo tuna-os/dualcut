@@ -176,14 +176,35 @@ impl Default for Transform {
     }
 }
 
+/// Animation for one property: either a tween window (`from`/`to` over
+/// `start`..`end`) or an explicit `keyframes` list. Keyframes win when
+/// both are present.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Anim {
     pub property: AnimProperty,
+    #[serde(default)]
     pub from: f64,
+    #[serde(default)]
     pub to: f64,
     /// Seconds relative to the clip's own start.
+    #[serde(default)]
     pub start: f64,
+    #[serde(default)]
     pub end: f64,
+    #[serde(default)]
+    pub easing: Easing,
+    /// Explicit keyframes (seconds relative to the clip). When set, the
+    /// tween fields above are ignored.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub keyframes: Vec<Keyframe>,
+}
+
+/// A single keyframe: property value at time `t`, eased from the previous
+/// keyframe with `easing`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Keyframe {
+    pub t: f64,
+    pub value: f64,
     #[serde(default)]
     pub easing: Easing,
 }
@@ -293,8 +314,17 @@ impl Clip {
             bail!("clip {:?}: start/duration must be >= 0", self.id);
         }
         for anim in &self.animations {
-            if anim.end <= anim.start {
-                bail!("clip {:?}: animation end must be > start", self.id);
+            if anim.keyframes.is_empty() {
+                if anim.end <= anim.start {
+                    bail!("clip {:?}: animation end must be > start", self.id);
+                }
+            } else {
+                if anim.keyframes.len() < 2 {
+                    bail!("clip {:?}: keyframe animations need at least 2 keyframes", self.id);
+                }
+                if anim.keyframes.windows(2).any(|w| w[1].t <= w[0].t) {
+                    bail!("clip {:?}: keyframes must be in strictly increasing time order", self.id);
+                }
             }
         }
         if let Element::CompRef { r#ref, .. } = &self.element {
@@ -620,6 +650,29 @@ mod tests {
         let clip = p.overlays[0].clips.iter().find(|c| c.id == "wm-text").unwrap();
         assert_eq!(clip.start, 2.5);
         assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn keyframe_animations_validate() {
+        let mut p = demo();
+        if let Some(c) = find_clip_mut(&mut p, "intro-title") {
+            c.animations.push(Anim {
+                property: AnimProperty::Y,
+                from: 0.0, to: 0.0, start: 0.0, end: 0.0,
+                easing: Easing::Linear,
+                keyframes: vec![
+                    Keyframe { t: 0.0, value: 700.0, easing: Easing::Linear },
+                    Keyframe { t: 1.0, value: 300.0, easing: Easing::EaseOut },
+                    Keyframe { t: 2.0, value: 320.0, easing: Easing::EaseInOut },
+                ],
+            });
+        }
+        assert!(p.validate().is_ok());
+        // out-of-order keyframes rejected
+        if let Some(c) = find_clip_mut(&mut p, "intro-title") {
+            c.animations.last_mut().unwrap().keyframes[2].t = 0.5;
+        }
+        assert!(p.validate().is_err());
     }
 
     #[test]

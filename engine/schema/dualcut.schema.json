@@ -154,11 +154,7 @@
     "anim": {
       "type": "object",
       "required": [
-        "property",
-        "from",
-        "to",
-        "start",
-        "end"
+        "property"
       ],
       "properties": {
         "property": {
@@ -182,7 +178,7 @@
         },
         "end": {
           "type": "number",
-          "exclusiveMinimum": 0
+          "minimum": 0
         },
         "easing": {
           "enum": [
@@ -191,6 +187,34 @@
             "easeOut",
             "easeInOut"
           ]
+        },
+        "keyframes": {
+          "type": "array",
+          "minItems": 2,
+          "items": {
+            "type": "object",
+            "required": [
+              "t",
+              "value"
+            ],
+            "properties": {
+              "t": {
+                "type": "number",
+                "minimum": 0
+              },
+              "value": {
+                "type": "number"
+              },
+              "easing": {
+                "enum": [
+                  "linear",
+                  "easeIn",
+                  "easeOut",
+                  "easeInOut"
+                ]
+              }
+            }
+          }
         }
       }
     },

@@ -133,10 +133,21 @@ export interface Transform {
 
 export interface Anim {
   property: "x" | "y" | "width" | "height" | "opacity";
-  from: number;
-  to: number;
+  /** Tween window form (ignored when keyframes is set). */
+  from?: number;
+  to?: number;
   /** Seconds relative to the clip's own start. */
-  start: number;
-  end: number;
+  start?: number;
+  end?: number;
+  easing?: "linear" | "easeIn" | "easeOut" | "easeInOut";
+  /** Explicit keyframes (>= 2, strictly increasing t). Wins over the tween. */
+  keyframes?: Keyframe[];
+}
+
+export interface Keyframe {
+  /** Seconds relative to the clip. */
+  t: number;
+  value: number;
+  /** Easing from the previous keyframe into this one. */
   easing?: "linear" | "easeIn" | "easeOut" | "easeInOut";
 }

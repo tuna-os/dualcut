@@ -267,7 +267,8 @@ fn apply_transform_and_animations(
         by_prop.entry(prop).or_default().push(anim);
     }
     for (prop, mut anims) in by_prop {
-        anims.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let sort_key = |a: &Anim| a.keyframes.first().map_or(a.start, |k| k.t);
+        anims.sort_by(|a, b| sort_key(a).total_cmp(&sort_key(b)));
         if let Err(e) = apply_property_animations(ges_clip, clip, prop, &anims) {
             warnings.push(format!("clip {:?}: animations on {prop} skipped: {e}", clip.id));
         }
@@ -302,23 +303,39 @@ fn apply_property_animations(
     };
 
     let inpoint = element.inpoint().nseconds() as f64 / 1e9;
-    // Hold the first window's start value from the clip's beginning.
-    set(inpoint, anims[0].from);
+    let first_value = |a: &Anim| a.keyframes.first().map_or(a.from, |k| k.value);
+    let last_of = |a: &Anim| a.keyframes.last().map_or((a.end, a.to), |k| (k.t, k.value));
+    // Hold the first animation's initial value from the clip's beginning.
+    set(inpoint, first_value(anims[0]));
     for anim in anims {
-        // Sample eased values densely; the control source interpolates
-        // linearly between samples, so easing curves survive.
-        let steps = 24.max(((anim.end - anim.start) * 30.0) as usize);
-        for i in 0..=steps {
-            let p = i as f64 / steps as f64;
-            let value = anim.from + (anim.to - anim.from) * ease(anim.easing, p);
-            set(inpoint + anim.start + (anim.end - anim.start) * p, value);
+        if anim.keyframes.is_empty() {
+            // Tween window: sample eased values densely; the control source
+            // interpolates linearly between samples, so curves survive.
+            let steps = 24.max(((anim.end - anim.start) * 30.0) as usize);
+            for i in 0..=steps {
+                let p = i as f64 / steps as f64;
+                let value = anim.from + (anim.to - anim.from) * ease(anim.easing, p);
+                set(inpoint + anim.start + (anim.end - anim.start) * p, value);
+            }
+        } else {
+            // Keyframes: sample each eased segment between neighbours.
+            set(inpoint + anim.keyframes[0].t, anim.keyframes[0].value);
+            for pair in anim.keyframes.windows(2) {
+                let (a, b) = (&pair[0], &pair[1]);
+                let steps = 12.max(((b.t - a.t) * 30.0) as usize);
+                for i in 1..=steps {
+                    let p = i as f64 / steps as f64;
+                    let value = a.value + (b.value - a.value) * ease(b.easing, p);
+                    set(inpoint + a.t + (b.t - a.t) * p, value);
+                }
+            }
         }
     }
     // Hold the last value to the end of the clip so linear mode never
-    // extrapolates past the final window.
-    let last = anims.last().unwrap();
-    let clip_end = inpoint + clip.duration.max(last.end) + 1.0;
-    set(clip_end, last.to);
+    // extrapolates past the final segment.
+    let (last_t, last_v) = last_of(anims.last().unwrap());
+    let clip_end = inpoint + clip.duration.max(last_t) + 1.0;
+    set(clip_end, last_v);
 
     let source: gst::ControlSource = cs.upcast();
     element
