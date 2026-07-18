@@ -27,6 +27,9 @@ pub struct Compiled {
 pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled> {
     project.validate()?;
     let timeline = ges::Timeline::new_audio_video();
+    // Crossfades: scenes with a transition overlap their predecessor on the
+    // same GES layers; auto-transition renders the blend.
+    timeline.set_auto_transition(true);
     let mut warnings = Vec::new();
 
     // Restrict the video track to the project's frame size and rate so

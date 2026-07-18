@@ -46,9 +46,28 @@ pub struct Scene {
     pub name: String,
     /// Seconds.
     pub duration: f64,
+    /// Transition from the previous scene into this one (ignored on the
+    /// first scene). None = hard cut.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub transition: Option<Transition>,
     /// Layers composited top-first (index 0 renders on top).
     #[serde(default)]
     pub layers: Vec<Clip>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Transition {
+    #[serde(default)]
+    pub kind: TransitionKind,
+    /// Seconds of overlap with the previous scene.
+    pub duration: f64,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TransitionKind {
+    #[default]
+    Crossfade,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -198,14 +217,24 @@ impl Project {
         serde_json::to_string_pretty(self).expect("project serializes")
     }
 
-    /// Total duration in seconds (scenes are sequential).
+    /// Total duration in seconds. Scenes are sequential; a transition
+    /// overlaps a scene with its predecessor, shortening the total.
     pub fn duration(&self) -> f64 {
-        self.scenes.iter().map(|s| s.duration).sum()
+        match self.scenes.len() {
+            0 => 0.0,
+            n => self.scene_offset(n - 1) + self.scenes[n - 1].duration,
+        }
     }
 
-    /// Absolute start time of a scene by index.
+    /// Absolute start time of a scene by index (transition overlaps pull
+    /// scenes earlier).
     pub fn scene_offset(&self, index: usize) -> f64 {
-        self.scenes[..index].iter().map(|s| s.duration).sum()
+        let mut offset = 0.0;
+        for i in 0..index {
+            offset += self.scenes[i].duration;
+            offset -= self.scenes[i + 1].transition.as_ref().map_or(0.0, |t| t.duration);
+        }
+        offset.max(0.0)
     }
 
     pub fn validate(&self) -> Result<()> {
@@ -226,6 +255,11 @@ impl Project {
             check(&scene.id, "scene")?;
             if scene.duration <= 0.0 {
                 bail!("scene {:?}: duration must be > 0", scene.id);
+            }
+            if let Some(t) = &scene.transition {
+                if t.duration <= 0.0 || t.duration >= scene.duration {
+                    bail!("scene {:?}: transition duration must be > 0 and < scene duration", scene.id);
+                }
             }
             for clip in &scene.layers {
                 check(&clip.id, "clip")?;
@@ -440,6 +474,17 @@ mod tests {
         remove_clip(&mut p, "wm-text");
         assert!(find_clip(&p, "wm-text").is_none());
         assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn transitions_overlap_scene_offsets() {
+        let mut p = demo();
+        p.scenes[1].transition = Some(Transition { kind: TransitionKind::Crossfade, duration: 1.0 });
+        assert_eq!(p.scene_offset(1), 2.0); // pulled 1s into scene 1
+        assert_eq!(p.duration(), 6.0); // 3 + 4 - 1
+        assert!(p.validate().is_ok());
+        p.scenes[1].transition = Some(Transition { kind: TransitionKind::Crossfade, duration: 5.0 });
+        assert!(p.validate().is_err()); // longer than the scene itself
     }
 
     #[test]
