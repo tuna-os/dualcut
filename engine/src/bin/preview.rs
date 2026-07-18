@@ -12,7 +12,7 @@
 
 use anyhow::{Context, Result};
 use dualcut_engine::{build_demo_timeline, document, document::Project, init, mapping};
-use document::{detach_audio, find_clip, find_clip_mut, remove_clip, save_as_def};
+use document::{detach_audio, find_clip, find_clip_mut, move_clip_to_lane, remove_clip, save_as_def};
 use ges::prelude::*;
 use gstreamer as gst;
 use gstreamer_editing_services as ges;
@@ -319,13 +319,14 @@ impl Editor {
                     duration,
                     Rc::new(move |raw_abs: f64| (raw_abs - scene_off).clamp(0.0, scene_dur - 0.1)),
                     true,
+                    li,
                 );
             }
             row.append(&lane);
             ui.strip.append(&row);
         }
 
-        for track in &project.overlays {
+        for (ti, track) in project.overlays.iter().enumerate() {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             let name = if track.name.is_empty() { &track.id } else { &track.name };
             let tag = gtk::Label::new(Some(&format!("〜 {name}")));
@@ -342,6 +343,7 @@ impl Editor {
                     clip.duration,
                     Rc::new(|raw_abs: f64| raw_abs.max(0.0)),
                     false,
+                    max_layers + ti,
                 );
             }
             row.append(&lane);
@@ -361,6 +363,7 @@ impl Editor {
         duration: f64,
         to_start: Rc<dyn Fn(f64) -> f64>,
         scene_relative: bool,
+        lane_index: usize,
     ) {
         let project = {
             let st = self.state.borrow();
@@ -428,12 +431,27 @@ impl Editor {
             let id = clip.id.clone();
             let dragmeta = dragmeta.clone();
             let project_snapshot = project.clone();
-            drag.connect_drag_end(move |_, dx, _| {
-                if dx.abs() < 2.0 {
+            drag.connect_drag_end(move |_, dx, dy| {
+                if dx.abs() < 2.0 && dy.abs() < 2.0 {
                     return;
                 }
                 let (ox, trim) = dragmeta.get();
                 let mut project = project_snapshot.clone();
+                // Vertical drag beyond one row height = move to another lane.
+                const LANE_H: f64 = 36.0;
+                let lane_delta = (dy / LANE_H).round() as i64;
+                if !trim && lane_delta != 0 {
+                    let target = (lane_index as i64 + lane_delta)
+                        .clamp(0, document::lane_count(&project) as i64 - 1)
+                        as usize;
+                    let raw_abs = ((ox + dx).max(0.0)) / SCENE_PX_PER_SEC;
+                    let snapped = snap_time(&project, raw_abs);
+                    match move_clip_to_lane(&mut project, &id, target, snapped) {
+                        Ok(()) => this.commit_document(project),
+                        Err(e) => eprintln!("move to lane {target}: {e}"),
+                    }
+                    return;
+                }
                 if trim {
                     let new_dur = (duration + dx / SCENE_PX_PER_SEC).max(0.1);
                     let snapped_end = if scene_relative {

@@ -438,6 +438,73 @@ pub fn save_as_def(project: &mut Project, ids: &[String], name: &str) -> Result<
     project.validate()
 }
 
+/// A timeline lane: scene layer slots first (0..max layers), then overlay
+/// tracks. Mirrors the editor strip's row order.
+pub fn lane_count(project: &Project) -> usize {
+    let max_layers = project.scenes.iter().map(|s| s.layers.len()).max().unwrap_or(0);
+    max_layers + project.overlays.len()
+}
+
+/// Move a clip to another lane, keeping its on-screen absolute time.
+/// Scene-layer targets re-anchor scene-relative (the scene containing
+/// `abs_start`); overlay targets store absolute time.
+pub fn move_clip_to_lane(
+    project: &mut Project,
+    id: &str,
+    lane: usize,
+    abs_start: f64,
+) -> Result<()> {
+    let max_layers = project.scenes.iter().map(|s| s.layers.len()).max().unwrap_or(0);
+    if lane >= lane_count(project) {
+        bail!("lane {lane} out of range");
+    }
+    // Detach the clip from wherever it lives.
+    let mut found = None;
+    for scene in &mut project.scenes {
+        if let Some(pos) = scene.layers.iter().position(|c| c.id == id) {
+            found = Some(scene.layers.remove(pos));
+            break;
+        }
+    }
+    if found.is_none() {
+        for track in &mut project.overlays {
+            if let Some(pos) = track.clips.iter().position(|c| c.id == id) {
+                found = Some(track.clips.remove(pos));
+                break;
+            }
+        }
+    }
+    let Some(mut clip) = found else { bail!("clip {id:?} not found") };
+
+    if lane < max_layers {
+        // Scene layer slot: find the scene containing abs_start.
+        let index = (0..project.scenes.len())
+            .rev()
+            .find(|&i| abs_start >= project.scene_offset(i))
+            .unwrap_or(0);
+        let offset = project.scene_offset(index);
+        let scene = &mut project.scenes[index];
+        clip.start = (abs_start - offset).clamp(0.0, (scene.duration - 0.1).max(0.0));
+        while scene.layers.len() < lane {
+            // Pad missing slots so the clip lands on the requested lane.
+            scene.layers.push(Clip {
+                id: format!("{id}-slotpad-{}", scene.layers.len()),
+                start: 0.0,
+                duration: 0.1,
+                element: Element::Test {},
+                transform: Transform { opacity: 0.0, ..Default::default() },
+                animations: Vec::new(),
+            });
+        }
+        scene.layers.insert(lane.min(scene.layers.len()), clip);
+    } else {
+        let track = &mut project.overlays[lane - max_layers];
+        clip.start = abs_start.max(0.0);
+        track.clips.push(clip);
+    }
+    project.validate()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -532,6 +599,25 @@ mod tests {
         assert!(save_as_def(&mut p, &["intro-bg".into()], "my-template").is_err());
         // compref content refused
         assert!(save_as_def(&mut p, &["media-lower-third".into()], "t2").is_err());
+    }
+
+    #[test]
+    fn move_clip_between_lanes() {
+        let mut p = demo();
+        // wm-text lives on the overlay (lane 2: 2 scene slots + overlay 0).
+        // Move it into scene layer slot 0 at abs 4.0 (scene-media, rel 1.0).
+        move_clip_to_lane(&mut p, "wm-text", 0, 4.0).unwrap();
+        let scene = p.scenes.iter().find(|s| s.id == "scene-media").unwrap();
+        let clip = scene.layers.iter().find(|c| c.id == "wm-text").unwrap();
+        assert!((clip.start - 1.0).abs() < 1e-9);
+        assert!(p.overlays.iter().all(|t| t.clips.iter().all(|c| c.id != "wm-text")));
+
+        // And back out to the overlay track, absolute time preserved.
+        let max_layers = p.scenes.iter().map(|s| s.layers.len()).max().unwrap();
+        move_clip_to_lane(&mut p, "wm-text", max_layers, 2.5).unwrap();
+        let clip = p.overlays[0].clips.iter().find(|c| c.id == "wm-text").unwrap();
+        assert_eq!(clip.start, 2.5);
+        assert!(p.validate().is_ok());
     }
 
     #[test]
