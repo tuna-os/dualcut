@@ -290,6 +290,41 @@ impl Editor {
         }
         ui.strip.append(&scene_row);
 
+        // Scene-layer lanes: one row per layer slot, clips positioned at
+        // absolute time (scene offset + clip start). Dragging retimes the
+        // clip within its scene; right-edge drag trims duration.
+        let max_layers = project.scenes.iter().map(|s| s.layers.len()).max().unwrap_or(0);
+        for li in 0..max_layers {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let tag = gtk::Label::new(Some(&format!("layer {li}")));
+            tag.add_css_class("dim-label");
+            tag.set_width_chars(14);
+            row.append(&tag);
+            let lane = gtk::Fixed::new();
+            lane.set_size_request((project.duration() * SCENE_PX_PER_SEC) as i32 + 40, 30);
+            for (si, scene) in project.scenes.iter().enumerate() {
+                let Some(clip) = scene.layers.get(li) else { continue };
+                let offset = project.scene_offset(si);
+                let duration = if clip.duration > 0.0 {
+                    clip.duration
+                } else {
+                    (scene.duration - clip.start).max(0.1)
+                };
+                let scene_off = offset;
+                let scene_dur = scene.duration;
+                self.add_lane_clip(
+                    &lane,
+                    clip,
+                    offset + clip.start,
+                    duration,
+                    Rc::new(move |raw_abs: f64| (raw_abs - scene_off).clamp(0.0, scene_dur - 0.1)),
+                    true,
+                );
+            }
+            row.append(&lane);
+            ui.strip.append(&row);
+        }
+
         for track in &project.overlays {
             let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
             let name = if track.name.is_empty() { &track.id } else { &track.name };
@@ -297,86 +332,130 @@ impl Editor {
             tag.add_css_class("dim-label");
             tag.set_width_chars(14);
             row.append(&tag);
-
             let lane = gtk::Fixed::new();
             lane.set_size_request((project.duration() * SCENE_PX_PER_SEC) as i32 + 40, 30);
             for clip in &track.clips {
-                let button = gtk::Button::with_label(&clip.id);
-                button.add_css_class("flat");
-                button.set_size_request(
-                    ((clip.duration * SCENE_PX_PER_SEC) as i32).max(30),
-                    28,
+                self.add_lane_clip(
+                    &lane,
+                    clip,
+                    clip.start,
+                    clip.duration,
+                    Rc::new(|raw_abs: f64| raw_abs.max(0.0)),
+                    false,
                 );
-                button.set_tooltip_text(Some("Drag to move; click to select"));
-                if let document::Element::Audio { src, .. } = &clip.element {
-                    if let Some(uri) = media_uri(src, &self.base_dir()) {
-                        let wave = cache.join(format!("wave-{:016x}.png", fx_hash(&uri)));
-                        if wave.exists() {
-                            let pic = gtk::Picture::for_filename(&wave);
-                            pic.set_content_fit(gtk::ContentFit::Fill);
-                            button.set_child(Some(&pic));
-                            button.set_tooltip_text(Some(&clip.id));
-                        }
-                    }
-                }
-                lane.put(&button, clip.start * SCENE_PX_PER_SEC, 1.0);
-
-                {
-                    let this = self.clone();
-                    let id = clip.id.clone();
-                    let start = clip.start;
-                    button.connect_clicked(move |_| {
-                        {
-                            let mut st = this.state.borrow_mut();
-                            seek_to(&st.pipeline, start);
-                            st.selected = Some(id.clone());
-                        }
-                        this.rebuild_inspector();
-                    });
-                }
-
-                // Drag horizontally to retime; snaps to scene boundaries
-                // and the half-second grid on release.
-                let drag = gtk::GestureDrag::new();
-                let orig_x = Rc::new(std::cell::Cell::new(clip.start * SCENE_PX_PER_SEC));
-                {
-                    let orig_x = orig_x.clone();
-                    let start = clip.start;
-                    drag.connect_drag_begin(move |_, _, _| {
-                        orig_x.set(start * SCENE_PX_PER_SEC);
-                    });
-                }
-                {
-                    let lane = lane.clone();
-                    let button = button.clone();
-                    let orig_x = orig_x.clone();
-                    drag.connect_drag_update(move |_, dx, _| {
-                        lane.move_(&button, (orig_x.get() + dx).max(0.0), 1.0);
-                    });
-                }
-                {
-                    let this = self.clone();
-                    let id = clip.id.clone();
-                    let orig_x = orig_x.clone();
-                    let project_snapshot = project.clone();
-                    drag.connect_drag_end(move |_, dx, _| {
-                        if dx.abs() < 2.0 {
-                            return; // treat as click
-                        }
-                        let raw = ((orig_x.get() + dx).max(0.0)) / SCENE_PX_PER_SEC;
-                        let snapped = snap_time(&project_snapshot, raw);
-                        let mut project = project_snapshot.clone();
-                        if let Some(c) = find_clip_mut(&mut project, &id) {
-                            c.start = snapped;
-                        }
-                        this.commit_document(project);
-                    });
-                }
-                button.add_controller(drag);
             }
             row.append(&lane);
             ui.strip.append(&row);
         }
+    }
+
+    /// Shared lane clip: click selects+seeks, body drag retimes (snapped,
+    /// `to_start` maps absolute lane seconds to the stored start), edge
+    /// drag (last 12px) trims duration.
+    #[allow(clippy::too_many_arguments)]
+    fn add_lane_clip(
+        self: &Rc<Self>,
+        lane: &gtk::Fixed,
+        clip: &document::Clip,
+        abs_start: f64,
+        duration: f64,
+        to_start: Rc<dyn Fn(f64) -> f64>,
+        scene_relative: bool,
+    ) {
+        let project = {
+            let st = self.state.borrow();
+            st.project.clone()
+        };
+        let Some(project) = project else { return };
+        let cache = self.base_dir().join(".dualcut-cache");
+
+        let button = gtk::Button::with_label(&clip.id);
+        button.add_css_class("flat");
+        let width_px = ((duration * SCENE_PX_PER_SEC) as i32).max(30);
+        button.set_size_request(width_px, 28);
+        button.set_tooltip_text(Some("Drag to move · right edge trims"));
+        if let document::Element::Audio { src, .. } = &clip.element {
+            if let Some(uri) = media_uri(src, &self.base_dir()) {
+                let wave = cache.join(format!("wave-{:016x}.png", fx_hash(&uri)));
+                if wave.exists() {
+                    let pic = gtk::Picture::for_filename(&wave);
+                    pic.set_content_fit(gtk::ContentFit::Fill);
+                    button.set_child(Some(&pic));
+                    button.set_tooltip_text(Some(&clip.id));
+                }
+            }
+        }
+        lane.put(&button, abs_start * SCENE_PX_PER_SEC, 1.0);
+
+        {
+            let this = self.clone();
+            let id = clip.id.clone();
+            button.connect_clicked(move |_| {
+                {
+                    let mut st = this.state.borrow_mut();
+                    seek_to(&st.pipeline, abs_start);
+                    st.selected = Some(id.clone());
+                }
+                this.rebuild_inspector();
+            });
+        }
+
+        let drag = gtk::GestureDrag::new();
+        // (orig_x_px, trim_mode)
+        let dragmeta = Rc::new(std::cell::Cell::new((abs_start * SCENE_PX_PER_SEC, false)));
+        {
+            let dragmeta = dragmeta.clone();
+            drag.connect_drag_begin(move |_, sx, _| {
+                let trim = sx > (width_px as f64) - 12.0;
+                dragmeta.set((abs_start * SCENE_PX_PER_SEC, trim));
+            });
+        }
+        {
+            let lane = lane.clone();
+            let button = button.clone();
+            let dragmeta = dragmeta.clone();
+            drag.connect_drag_update(move |_, dx, _| {
+                let (ox, trim) = dragmeta.get();
+                if trim {
+                    button.set_size_request(((width_px as f64 + dx) as i32).max(20), 28);
+                } else {
+                    lane.move_(&button, (ox + dx).max(0.0), 1.0);
+                }
+            });
+        }
+        {
+            let this = self.clone();
+            let id = clip.id.clone();
+            let dragmeta = dragmeta.clone();
+            let project_snapshot = project.clone();
+            drag.connect_drag_end(move |_, dx, _| {
+                if dx.abs() < 2.0 {
+                    return;
+                }
+                let (ox, trim) = dragmeta.get();
+                let mut project = project_snapshot.clone();
+                if trim {
+                    let new_dur = (duration + dx / SCENE_PX_PER_SEC).max(0.1);
+                    let snapped_end = if scene_relative {
+                        new_dur
+                    } else {
+                        snap_time(&project, abs_start + new_dur) - abs_start
+                    };
+                    if let Some(c) = find_clip_mut(&mut project, &id) {
+                        c.duration = snapped_end.max(0.1);
+                    }
+                } else {
+                    let raw_abs = ((ox + dx).max(0.0)) / SCENE_PX_PER_SEC;
+                    let snapped = snap_time(&project, raw_abs);
+                    let new_start = to_start(snapped);
+                    if let Some(c) = find_clip_mut(&mut project, &id) {
+                        c.start = new_start;
+                    }
+                }
+                this.commit_document(project);
+            });
+        }
+        button.add_controller(drag);
     }
 
     /// Generate any missing media thumbnails off-thread, then refresh the
