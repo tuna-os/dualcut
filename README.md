@@ -1,68 +1,70 @@
 # dualcut
 
-**Install / update the app (Flatpak):**
+A GNOME video editor with **dual usage**: edit manually (scene timeline +
+inspector) or programmatically (live JSON document, TypeScript scripts,
+HTTP API for agents) — every surface stays in sync while the app runs.
+
+> Concept and spec by **[KiKaraage](https://github.com/KiKaraage)** (main author).
+> Implementation built with Claude Code.
+
+**Install / update (Flatpak):**
 
 ```sh
 curl -LO https://github.com/hanthor/dualcut/releases/latest/download/dualcut.flatpak && flatpak install --user --reinstall -y dualcut.flatpak
+flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json
 ```
-
-A video editor with **dual usage**: edit manually (multi-track timeline +
-parameter sidebar) or programmatically (live JSON document, editable in-app
-or by external agents) — both at the same time, always in sync.
-
-> Concept and spec by **[KiKaraage](https://github.com/KiKaraage)** (main author).
-> Implementation scaffolded with Claude Code.
-
-Inspired by CapCut/iMovie/Clipchamp (editing UX), Remotion & Hyperframes
-(declarative programmatic video), and tldraw offline / MagicPath (dual
-manual + programmatic editing with an agent-facing surface).
 
 ## How it works
 
-One declarative document — `composition.json` — is the single source of
-truth. Three surfaces edit it:
+One JSON **project document** is the single source of truth —
+**scenes** (sequential narrative spine) + **overlays** (tracks that cross
+scene cuts) + **defs** (reusable parameterised templates). Rendering is
+GStreamer Editing Services; shapes draw on the GPU via Vello; the UI is
+GTK4/libadwaita.
 
-| Surface | Where | Sync |
+| Surface | What | Sync |
 |---|---|---|
-| Manual UI | multi-track timeline, drag/trim clips, inspector sidebar | writes to the store, autosaved to disk |
-| In-app code | **Code** tab (CodeMirror JSON editor) | valid JSON applies live, debounced |
-| External agents | edit `composition.json`, or `GET`/`POST /__composition` | pushed into the running app over the Vite websocket |
+| App | scene strip w/ thumbnails, inspector, script tab, preview | writes the document, hot-reloads external edits |
+| File | edit the project JSON in any editor/agent | app reloads live (mtime watch) |
+| HTTP | `GET/POST /project`, `POST /script` (TypeScript), `/status` on `127.0.0.1:7357` | file-backed, works against the running app |
 
-See [AGENTS.md](AGENTS.md) for the document schema and agent workflow, or
-point your agent at [skills/dualcut/SKILL.md](skills/dualcut/SKILL.md) —
-an agent skill that ships in this repo, versioned with every commit.
+Agents: point your tool at **[skills/dualcut/SKILL.md](skills/dualcut/SKILL.md)**
+(ships in-repo, versioned with every commit). Deep reference:
+[AGENTS.md](AGENTS.md) · types [engine/schema/dualcut.d.ts](engine/schema/dualcut.d.ts)
+· [JSON Schema](engine/schema/dualcut.schema.json).
 
-## Run it
+## From source
 
 ```sh
-npm install
-npm run dev
+cd engine
+cargo run --features preview,vector,scripting --bin preview -- examples/demo-project.json
+cargo run --bin render -- new myproject.json "My video"   # scaffold
+cargo run --bin render -- myproject.json out.mp4          # or out.webm
+cargo run --bin serve  -- myproject.json                  # headless agent API
 ```
 
-Open http://localhost:5173. Try:
-
-- Drag clips around the timeline, trim their edges, drag between tracks.
-- Select a clip → edit its parameters and animations in the sidebar.
-- Switch to the **Code** tab and edit the JSON — the preview updates live.
-- From another terminal:
-  `curl -s localhost:5173/__composition | jq '.meta.title = "Hi"' | curl -sX POST -d @- localhost:5173/__composition`
-  — the open editor updates instantly.
-- Or just edit `composition.json` in your $EDITOR.
-
-### Shortcuts
-
-Space play/pause · ←/→ step frame (Shift = 1 s) · Home go to start ·
-Ctrl+Z / Ctrl+Shift+Z undo/redo · Delete remove selected clip
+Needs GStreamer (+GES), GTK4, libadwaita dev packages; see
+[engine/build-aux/io.github.hanthor.Dualcut.json](engine/build-aux/io.github.hanthor.Dualcut.json)
+for the canonical dependency list.
 
 ## Features
 
-- Multi-track compositing: text, shapes, images, video, audio
-- Per-clip animations (`from`/`to` tweens with easing incl. spring)
-- Scrubbable ruler, zoomable timeline, track mute/hide
-- Undo/redo across all three edit surfaces
-- Live bidirectional sync between UI ⇄ code ⇄ disk
+- Scene-based editing with crossfade transitions and overlay tracks
+- Text, video, audio, image clips + GPU vector shapes (rect, circle,
+  ellipse, star, polygon, line, arrow)
+- Tweened animations (x/y/opacity, easing) compiled to GStreamer control sources
+- Reusable parameterised templates (lower third, title card, caption built in)
+- Detach audio, undo/redo, multi-select, first-frame thumbnails
+- TypeScript scripting in-app and over HTTP (`export function edit(p) {…}`)
+- MP4 (H.264/AAC) and WebM (VP8/Vorbis) export
+- Releases: every `v*` tag auto-builds the Flatpak (`scripts/release.sh`)
 
-## Not yet
+Roadmap and status: [ROADMAP.md](ROADMAP.md) ·
+open work: [issues](https://github.com/hanthor/dualcut/issues)
 
-- Rendered export (WebCodecs/ffmpeg) — preview is DOM-based for now
-- Waveforms/thumbnails on clips, snapping, multi-select
+## v0 web prototype (reference)
+
+The original browser prototype (Vite + React, `src/`) established the
+dual-editing model and stays as a reference: `npm install && npm run dev`,
+then edit `composition.json` or `GET/POST /__composition`. Superseded by
+the native app; kept until the native timeline reaches full parity (#2).
