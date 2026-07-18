@@ -1,0 +1,343 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/hanthor/dualcut/blob/main/engine/schema/dualcut.schema.json",
+  "title": "dualcut project document",
+  "type": "object",
+  "required": [
+    "meta",
+    "scenes"
+  ],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": [
+        "title",
+        "width",
+        "height",
+        "fps"
+      ],
+      "properties": {
+        "title": {
+          "type": "string"
+        },
+        "width": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        },
+        "fps": {
+          "type": "integer",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "defs": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "object",
+        "required": [
+          "layers"
+        ],
+        "properties": {
+          "params": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "layers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/clip"
+            }
+          }
+        }
+      }
+    },
+    "scenes": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id",
+          "duration"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "transition": {
+            "type": "object",
+            "required": [
+              "duration"
+            ],
+            "properties": {
+              "kind": {
+                "const": "crossfade"
+              },
+              "duration": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          },
+          "layers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/clip"
+            }
+          }
+        }
+      }
+    },
+    "overlays": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "name": {
+            "type": "string"
+          },
+          "clips": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/clip"
+            }
+          }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "transform": {
+      "type": "object",
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "width": {
+          "type": "number",
+          "minimum": 0
+        },
+        "height": {
+          "type": "number",
+          "minimum": 0
+        },
+        "opacity": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 1
+        }
+      }
+    },
+    "anim": {
+      "type": "object",
+      "required": [
+        "property",
+        "from",
+        "to",
+        "start",
+        "end"
+      ],
+      "properties": {
+        "property": {
+          "enum": [
+            "x",
+            "y",
+            "opacity"
+          ]
+        },
+        "from": {
+          "type": "number"
+        },
+        "to": {
+          "type": "number"
+        },
+        "start": {
+          "type": "number",
+          "minimum": 0
+        },
+        "end": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "easing": {
+          "enum": [
+            "linear",
+            "easeIn",
+            "easeOut",
+            "easeInOut"
+          ]
+        }
+      }
+    },
+    "clip": {
+      "type": "object",
+      "required": [
+        "id",
+        "type"
+      ],
+      "properties": {
+        "id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start": {
+          "type": "number",
+          "minimum": 0
+        },
+        "duration": {
+          "type": "number",
+          "minimum": 0
+        },
+        "transform": {
+          "$ref": "#/$defs/transform"
+        },
+        "animations": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/anim"
+          }
+        },
+        "type": {
+          "enum": [
+            "text",
+            "video",
+            "audio",
+            "image",
+            "shape",
+            "compref",
+            "test"
+          ]
+        },
+        "text": {
+          "type": "string"
+        },
+        "font": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string",
+          "pattern": "^#[0-9a-fA-F]{6}([0-9a-fA-F]{2})?$"
+        },
+        "src": {
+          "type": "string"
+        },
+        "offset": {
+          "type": "number",
+          "minimum": 0
+        },
+        "volume": {
+          "type": "number",
+          "minimum": 0
+        },
+        "shape": {
+          "enum": [
+            "rect",
+            "circle",
+            "ellipse",
+            "star",
+            "polygon",
+            "line",
+            "arrow"
+          ]
+        },
+        "fill": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "args": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        }
+      },
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "text"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "text"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "enum": [
+                  "video",
+                  "audio",
+                  "image"
+                ]
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "src"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "shape"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "shape"
+            ]
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "type": {
+                "const": "compref"
+              }
+            }
+          },
+          "then": {
+            "required": [
+              "ref"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

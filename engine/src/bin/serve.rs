@@ -3,7 +3,9 @@
 //!
 //!   GET  /project           current document (JSON)
 //!   POST /project           replace document (validated; saved to disk)
-//!   POST /render            {"out": "path.mp4"} -> renders, blocks, reports
+//!   POST /render            {"out": "path.mp4", "profile": "mp4|webm"}
+//!   POST /script            TypeScript body: `export function edit(p: Project): Project`
+//!                           (requires the "scripting" cargo feature)
 //!   GET  /status            engine info
 //!
 //! Usage: serve <project.json> [port]     (default port 7357)
@@ -85,6 +87,29 @@ fn main() -> Result<()> {
                     Err(e) => json_response(500, format!(r#"{{"error":{:?}}}"#, e.to_string())),
                 }
             }
+            (Method::Post, "/script") => {
+                #[cfg(feature = "scripting")]
+                {
+                    let project = state.lock().unwrap().project.clone();
+                    match run_script(&body, &project) {
+                        Ok(project) => {
+                            let mut state = state.lock().unwrap();
+                            std::fs::write(&state.path, project.to_json())
+                                .context("saving project file")?;
+                            state.project = project;
+                            json_response(200, r#"{"ok":true}"#.into())
+                        }
+                        Err(e) => json_response(400, format!(r#"{{"error":{:?}}}"#, e.to_string())),
+                    }
+                }
+                #[cfg(not(feature = "scripting"))]
+                {
+                    json_response(
+                        501,
+                        r#"{"error":"engine built without the scripting feature"}"#.into(),
+                    )
+                }
+            }
             (Method::Get, "/status") => {
                 let state = state.lock().unwrap();
                 json_response(
@@ -124,4 +149,23 @@ fn render_with_profile(
     pipeline.set_mode(ges::PipelineFlags::RENDER)?;
     run_to_eos(&pipeline)?;
     Ok(compiled.warnings)
+}
+
+/// Run a TypeScript module against the current document. The module must
+/// export `edit(project: Project): Project`; the returned document is
+/// validated before being accepted.
+#[cfg(feature = "scripting")]
+fn run_script(source: &str, project: &Project) -> Result<Project> {
+    use rustyscript::{json_args, Module, Runtime, RuntimeOptions};
+    let mut runtime = Runtime::new(RuntimeOptions::default())?;
+    let module = Module::new("agent-script.ts", source);
+    let handle = runtime.load_module(&module)?;
+    let value: serde_json::Value = runtime.call_function(
+        Some(&handle),
+        "edit",
+        json_args!(serde_json::to_value(project)?),
+    )?;
+    let edited: Project = serde_json::from_value(value).context("script returned invalid document")?;
+    edited.validate()?;
+    Ok(edited)
 }
