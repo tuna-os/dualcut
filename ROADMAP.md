@@ -126,10 +126,15 @@ Project
   resolution/bitrate presets), audio gain/fades, waveforms + thumbnails on
   clips, snapping, multi-select.
 - **M7 — Flatpak & Flathub.** The shipping artifact: finish the manifest
-  (GNOME 48 runtime, rust-stable SDK extension, `flatpak-cargo-generator`
+  (GNOME runtime, rust-stable SDK extension, `flatpak-cargo-generator`
   offline sources, GES module if the runtime lacks it), portals for media
   access (no broad filesystem holes), appstream metainfo + screenshots,
   Flathub submission under KiKaraage/hanthor.
+  *Status: automated releases live (2026-07-18) — every `v*` tag builds
+  `dualcut.flatpak` (GNOME 50 runtime + GES module) and attaches it to a
+  GitHub Release; verified end-to-end with the README install one-liner
+  (v0.1.0). Remaining: appstream metainfo, desktop file + icon, screenshots,
+  Flathub submission.*
 
 ## Open questions
 
