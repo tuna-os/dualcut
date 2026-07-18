@@ -308,6 +308,17 @@ impl Editor {
                     28,
                 );
                 button.set_tooltip_text(Some("Drag to move; click to select"));
+                if let document::Element::Audio { src, .. } = &clip.element {
+                    if let Some(uri) = media_uri(src, &self.base_dir()) {
+                        let wave = cache.join(format!("wave-{:016x}.png", fx_hash(&uri)));
+                        if wave.exists() {
+                            let pic = gtk::Picture::for_filename(&wave);
+                            pic.set_content_fit(gtk::ContentFit::Fill);
+                            button.set_child(Some(&pic));
+                            button.set_tooltip_text(Some(&clip.id));
+                        }
+                    }
+                }
                 lane.put(&button, clip.start * SCENE_PX_PER_SEC, 1.0);
 
                 {
@@ -372,31 +383,47 @@ impl Editor {
     /// strip once so they appear.
     fn spawn_thumbnail_worker(self: &Rc<Self>, project: &Project, cache: &std::path::Path) {
         let base_dir = self.base_dir();
-        let mut wanted: Vec<String> = Vec::new();
-        for scene in &project.scenes {
-            for clip in &scene.layers {
-                if let document::Element::Video { src, .. } | document::Element::Image { src } =
-                    &clip.element
-                {
+        let mut thumbs: Vec<String> = Vec::new();
+        let mut waves: Vec<String> = Vec::new();
+        let all_clips = project
+            .scenes
+            .iter()
+            .flat_map(|s| s.layers.iter())
+            .chain(project.overlays.iter().flat_map(|t| t.clips.iter()));
+        for clip in all_clips {
+            match &clip.element {
+                document::Element::Video { src, .. } | document::Element::Image { src } => {
                     if let Some(uri) = media_uri(src, &base_dir) {
-                        let file = cache.join(format!("thumb-{:016x}.png", fx_hash(&uri)));
-                        if !file.exists() {
-                            wanted.push(uri);
+                        if !cache.join(format!("thumb-{:016x}.png", fx_hash(&uri))).exists() {
+                            thumbs.push(uri);
                         }
                     }
                 }
+                document::Element::Audio { src, .. } => {
+                    if let Some(uri) = media_uri(src, &base_dir) {
+                        if !cache.join(format!("wave-{:016x}.png", fx_hash(&uri))).exists() {
+                            waves.push(uri);
+                        }
+                    }
+                }
+                _ => {}
             }
         }
-        if wanted.is_empty() {
+        if thumbs.is_empty() && waves.is_empty() {
             return;
         }
         let cache = cache.to_path_buf();
         let this = self.clone();
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
-            for uri in wanted {
+            for uri in thumbs {
                 if let Err(e) = dualcut_engine::thumbs::thumbnail_png(&cache, &uri) {
                     eprintln!("thumbnail failed for {uri}: {e:#}");
+                }
+            }
+            for uri in waves {
+                if let Err(e) = dualcut_engine::thumbs::waveform_png(&cache, &uri) {
+                    eprintln!("waveform failed for {uri}: {e:#}");
                 }
             }
             let _ = tx.send(());

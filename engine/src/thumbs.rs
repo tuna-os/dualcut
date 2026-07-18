@@ -64,3 +64,65 @@ fn fxhash(s: &str) -> u64 {
     }
     h
 }
+
+const WF_W: u32 = 240;
+const WF_H: u32 = 28;
+
+/// Render (or fetch cached) a peak waveform strip for a media URI's audio.
+/// Synchronous — call from a worker thread.
+pub fn waveform_png(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
+    let file = cache_dir.join(format!("wave-{:016x}.png", fxhash(uri)));
+    if file.exists() {
+        return Ok(file);
+    }
+    std::fs::create_dir_all(cache_dir)?;
+
+    let pipeline = gst::parse::launch(&format!(
+        "uridecodebin uri={uri} ! audioconvert ! audioresample ! \
+         audio/x-raw,format=F32LE,channels=1,rate=8000 ! \
+         appsink name=sink sync=false"
+    ))?
+    .downcast::<gst::Pipeline>()
+    .map_err(|_| anyhow::anyhow!("not a pipeline"))?;
+    let sink = pipeline
+        .by_name("sink")
+        .context("appsink missing")?
+        .downcast::<gst_app::AppSink>()
+        .map_err(|_| anyhow::anyhow!("not an appsink"))?;
+
+    pipeline.set_state(gst::State::Playing)?;
+    let mut samples: Vec<f32> = Vec::new();
+    loop {
+        match sink.pull_sample() {
+            Ok(sample) => {
+                if let Some(buffer) = sample.buffer() {
+                    let map = buffer.map_readable()?;
+                    samples.extend(
+                        map.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
+                    );
+                }
+            }
+            Err(_) => break, // EOS or error ends the stream
+        }
+    }
+    pipeline.set_state(gst::State::Null)?;
+    if samples.is_empty() {
+        anyhow::bail!("no audio samples decoded");
+    }
+
+    // Peak per bucket.
+    let bucket = (samples.len() / WF_W as usize).max(1);
+    let mut img = image::RgbaImage::new(WF_W, WF_H);
+    for x in 0..WF_W {
+        let range = &samples[(x as usize * bucket).min(samples.len() - 1)
+            ..((x as usize + 1) * bucket).min(samples.len())];
+        let peak = range.iter().fold(0.0f32, |m, s| m.max(s.abs())).min(1.0);
+        let half = ((peak * (WF_H as f32 / 2.0 - 1.0)) as u32).max(1);
+        let mid = WF_H / 2;
+        for y in (mid - half)..(mid + half) {
+            img.put_pixel(x, y, image::Rgba([0x5d, 0xd3, 0x9e, 0xff]));
+        }
+    }
+    img.save(&file)?;
+    Ok(file)
+}
