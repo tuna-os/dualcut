@@ -46,6 +46,39 @@
       ]
     },
     {
+      "name": "x264",
+      "buildsystem": "simple",
+      "build-commands": [
+        "./configure --prefix=/app --enable-shared --disable-cli --enable-pic",
+        "make -j $FLATPAK_BUILDER_N_JOBS",
+        "make install"
+      ],
+      "sources": [
+        {
+          "type": "git",
+          "url": "https://code.videolan.org/videolan/x264.git",
+          "commit": "b35605ace3ddf7c1a5d67a2eb553f034aef41d55"
+        }
+      ]
+    },
+    {
+      "name": "gst-plugins-ugly",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Ddoc=disabled",
+        "-Dgpl=enabled",
+        "-Dauto_features=disabled",
+        "-Dx264=enabled"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://gstreamer.freedesktop.org/src/gst-plugins-ugly/gst-plugins-ugly-1.26.10.tar.xz",
+          "sha256": "b2c648ef62cbf03cdc215f55dca01e2e8372983d8c88de3fa03671ddf08d7d14"
+        }
+      ]
+    },
+    {
       "name": "gst-libav",
       "buildsystem": "meson",
       "config-opts": [
