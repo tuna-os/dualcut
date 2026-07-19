@@ -14,7 +14,7 @@ Legend: ✅ solid · 🟡 partial/basic · ❌ absent · — not applicable
 | Import media library | ✅ | ✅ | ✅ | ✅ | ✅ (`library`) |
 | Drag-and-drop import | ✅ | ✅ | ✅ | ✅ | — |
 | Thumbnails / waveforms | ✅ | ✅ | ✅ | ✅ | ✅ (cached) |
-| Proxy media for smooth preview | ✅ | ✅ | ✅ | ❌ | ❌ |
+| Proxy media for smooth preview | ✅ | ✅ | ✅ | ✅ | ✅ (cached, preview-only) |
 | Stock/cloud asset store | ✅ | 🟡 | ❌ | ❌ | ❌ |
 
 ## Timeline
@@ -95,9 +95,8 @@ Legend: ✅ solid · 🟡 partial/basic · ❌ absent · — not applicable
 ## Biggest gaps to close (GUI-first)
 
 1. **Split at playhead** — the most-used edit primitive we lack (#21).
-2. **Proxy media** — smooth preview for real 4K footage.
-3. **Track mute/solo/hide** toggles on lanes.
-4. **Masks / chroma key** — needs engine work (frei0r or custom).
-5. **Speed ramping** — GES supports rate; unexposed in the document.
-6. **Auto-captions** — pairs naturally with the agent surface (STT →
+2. **Track mute/solo/hide** toggles on lanes.
+3. **Masks / chroma key** — needs engine work (frei0r or custom).
+4. **Speed ramping** — GES supports rate; unexposed in the document.
+5. **Auto-captions** — pairs naturally with the agent surface (STT →
    subtitle overlay track).

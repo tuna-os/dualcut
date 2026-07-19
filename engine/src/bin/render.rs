@@ -90,6 +90,19 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // `render proxy <media>` builds the preview proxy for a media file
+    // into .dualcut-cache next to it (debug probe for issue #30).
+    #[cfg(feature = "preview")]
+    if first == "proxy" {
+        let media = args.next().context("usage: render proxy <media>")?;
+        let abs = std::path::absolute(&media)?;
+        let uri = format!("file://{}", abs.display());
+        let base = abs.parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+        let out = dualcut_engine::thumbs::proxy_mp4(&base.join(".dualcut-cache"), &uri)?;
+        println!("proxy -> {}", out.display());
+        return Ok(());
+    }
+
     // Optional third argument overrides the encoding profile
     // (mp4|webm|h265|vp9|av1|prores); default derives from the extension.
     let mut profile_override: Option<String> = None;
