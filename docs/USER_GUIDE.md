@@ -65,7 +65,7 @@ scenes, retiming clips, generating layers from data.
 ## Editing clips
 
 Select a clip in the timeline, preview, or Inspect list to edit its
-timing, transform, and text; add transition presets (fades, slides,
+timing, transform, and text; add animation presets (fades, slides,
 audio fades) or hand-tune keyframes per property; stack **effects**
 (blur, color) with live parameter spinners.
 

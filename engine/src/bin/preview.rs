@@ -1478,7 +1478,7 @@ impl Editor {
         }
 
         // Presets.
-        let tr_head = gtk::Label::new(Some("Transitions"));
+        let tr_head = gtk::Label::new(Some("Animations"));
         tr_head.add_css_class("heading");
         tr_head.set_halign(gtk::Align::Start);
         tr_head.set_margin_top(8);
