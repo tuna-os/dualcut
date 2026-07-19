@@ -2305,12 +2305,25 @@ fn build_ui(app: &adw::Application) -> Result<()> {
         });
     }
     {
-        // Recents popover.
+        // Recents popover; placeholder row when there is no history yet.
         let pop = gtk::Popover::new();
         let list = gtk::ListBox::new();
         list.set_selection_mode(gtk::SelectionMode::None);
         list.add_css_class("boxed-list");
-        for path in load_recents() {
+        let recents = load_recents();
+        if recents.is_empty() {
+            let empty = gtk::Label::new(Some("No recent projects"));
+            empty.add_css_class("dim-label");
+            empty.set_margin_top(8);
+            empty.set_margin_bottom(8);
+            empty.set_margin_start(12);
+            empty.set_margin_end(12);
+            let lbrow = gtk::ListBoxRow::new();
+            lbrow.set_activatable(false);
+            lbrow.set_child(Some(&empty));
+            list.append(&lbrow);
+        }
+        for path in recents {
             let row = gtk::Button::with_label(
                 path.file_name().and_then(|n| n.to_str()).unwrap_or("project"),
             );
