@@ -25,6 +25,17 @@ pub struct Compiled {
 }
 
 pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled> {
+    compile_scaled(project, base_dir, 1.0)
+}
+
+/// Compile with the video track restricted to `scale` × the project
+/// resolution — previews render faster at half/quarter size while
+/// exports keep using [`compile`] at full quality.
+pub fn compile_scaled(
+    project: &Project,
+    base_dir: &std::path::Path,
+    scale: f64,
+) -> Result<Compiled> {
     project.validate()?;
     let timeline = ges::Timeline::new_audio_video();
     // Crossfades: scenes with a transition overlap their predecessor on the
@@ -36,9 +47,11 @@ pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled
     // render output matches meta instead of GES defaults.
     for track in timeline.tracks() {
         if let Ok(video_track) = track.clone().downcast::<ges::VideoTrack>() {
+            let w = ((project.meta.width as f64 * scale) as i32).max(2) & !1;
+            let h = ((project.meta.height as f64 * scale) as i32).max(2) & !1;
             let caps = gst::Caps::builder("video/x-raw")
-                .field("width", project.meta.width)
-                .field("height", project.meta.height)
+                .field("width", w)
+                .field("height", h)
                 .field("framerate", gst::Fraction::new(project.meta.fps, 1))
                 .build();
             video_track.set_restriction_caps(&caps);

@@ -90,8 +90,29 @@ fn start_paused(pipeline: &ges::Pipeline) -> Result<()> {
     Ok(())
 }
 
+fn preview_scale() -> f64 {
+    std::fs::read_to_string(prefs_file())
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| l.trim().strip_prefix("preview_scale=").map(str::to_string))
+        })
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0.5)
+}
+
+fn prefs_set_preview_scale(value: f64) {
+    let file = prefs_file();
+    if let Some(dir) = file.parent() {
+        let _ = std::fs::create_dir_all(dir);
+    }
+    let show = prefs_show_script();
+    let _ = std::fs::write(&file, format!("show_script={show}\npreview_scale={value}\n"));
+}
+
 fn compile_project(project: &Project, base_dir: &std::path::Path) -> Result<ges::Timeline> {
-    let compiled = mapping::compile(project, base_dir)?;
+    // Preview pipelines render at reduced resolution (Preferences);
+    // exports go through render_project at full quality.
+    let compiled = mapping::compile_scaled(project, base_dir, preview_scale())?;
     for warning in &compiled.warnings {
         eprintln!("warning: {warning}");
     }
@@ -1797,7 +1818,8 @@ fn prefs_set_show_script(value: bool) {
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let _ = std::fs::write(&file, format!("show_script={value}\n"));
+    let scale = preview_scale();
+    let _ = std::fs::write(&file, format!("show_script={value}\npreview_scale={scale}\n"));
 }
 
 fn recents_file() -> PathBuf {
@@ -2782,6 +2804,34 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                     });
                 }
                 group.add(&row);
+                let quality = adw::ComboRow::builder()
+                    .title("Preview quality")
+                    .subtitle("Lower is faster; exports always render at full quality")
+                    .build();
+                let opts = gtk::StringList::new(&["Full", "Half", "Quarter"]);
+                quality.set_model(Some(&opts));
+                quality.set_selected(match preview_scale() {
+                    s if s >= 0.99 => 0,
+                    s if s >= 0.49 => 1,
+                    _ => 2,
+                });
+                {
+                    let editor = editor.clone();
+                    quality.connect_selected_notify(move |q| {
+                        let scale = match q.selected() {
+                            0 => 1.0,
+                            2 => 0.25,
+                            _ => 0.5,
+                        };
+                        prefs_set_preview_scale(scale);
+                        // Recompile the preview pipeline at the new scale.
+                        let project = editor.state.borrow().project.clone();
+                        if let Some(project) = project {
+                            editor.rebuild_in_memory(project);
+                        }
+                    });
+                }
+                group.add(&quality);
                 page.add(&group);
                 dialog.add(&page);
                 dialog.present(editor.window().as_ref());
