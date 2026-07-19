@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.24.0" date="2026-07-19">
+      <description>
+        <p>Auto-captions works out of the box: bundled CPU-only whisper.cpp + a tiny English model in the flatpak, no external install needed.</p>
+      </description>
+    </release>
     <release version="0.23.0" date="2026-07-19">
       <description>
         <p>Denoise effect (WebRTC noise suppression); speed control (constant rate) shipped and verified; keyframed ramps parked with a root-caused design writeup (#40).</p>
