@@ -53,13 +53,18 @@ jobs:
     permissions:
       contents: write
     steps:
+      # checkout silently degrades to a tarball (no .git) when the
+      # container lacks git, breaking the commit step later.
+      - name: Install git first
+        run: dnf install -y -q git
+
       - uses: actions/checkout@v4
         with:
           ref: main
 
       - name: Install build + runtime dependencies
         run: |
-          dnf install -y -q git cargo rust clang-devel pkgconf-pkg-config \
+          dnf install -y -q cargo rust clang-devel pkgconf-pkg-config \
             gtk4-devel libadwaita-devel gstreamer1-devel \
             gstreamer1-plugins-base-devel gst-editing-services-devel \
             gstreamer1-plugins-good gstreamer1-plugins-bad-free \

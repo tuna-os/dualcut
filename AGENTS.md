@@ -8,6 +8,16 @@ The Rust engine in `engine/` uses document model v2 — **scenes** (sequential
 narrative spine) + **overlays** (tracks crossing scene cuts) + **defs**
 (reusable parameterised compositions). Full types: `engine/src/document.rs`.
 
+## HTTP ops (POST /op)
+
+Ops with nontrivial math, so you don't reimplement them:
+`{"op": "split", "id": "clip", "at": 5.0}` → splits at absolute time
+(media offsets advance, animations divide) and returns `new_id`;
+`{"op": "ripple_delete", "id": "clip"}` closes the gap;
+`{"op": "detach_audio", "id": "clip"}`;
+`{"op": "move_to_lane", "id": "clip", "lane": 2, "at": 3.5}`.
+Recipes: docs/recipes/ (auto-captions).
+
 ## Editing surfaces
 
 1. **File**: edit the project JSON (e.g. `engine/examples/demo-project.json`).
@@ -40,6 +50,10 @@ narrative spine) + **overlays** (tracks crossing scene cuts) + **defs**
 ```
 
 Clip: `{ id, start, duration, type, …element fields, transform?, animations?, effects? }`
+- text extras: `align` (left|center|right — overrides x positioning),
+  `outline` (color), `shadow` (bool)
+- overlay tracks: `muted` / `hidden` booleans (non-destructive)
+- `library`: media paths the user imported (relative to the project)
 - effects: `{type: "blur", amount}` (sigma 0-50); `{type: "color",
   brightness?, contrast?, saturation?, hue?}`; `{type: "chromakey",
   color?, angle?, noise?}` (green screen); `{type: "crop", left?,

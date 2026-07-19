@@ -54,6 +54,44 @@ pub fn serve_file_api(path: PathBuf, port: u16) -> Result<()> {
                 },
                 Err(e) => json_response(400, format!(r#"{{"error":{:?}}}"#, e.to_string())),
             },
+            // Editing ops with nontrivial math, so agents don't have to
+            // reimplement offset/animation splitting. Body: {"op": ...}.
+            (Method::Post, "/op") => match load().and_then(|mut p| {
+                let req: serde_json::Value = serde_json::from_str(&body)?;
+                let op = req["op"].as_str().unwrap_or_default().to_string();
+                let id = req["id"].as_str().unwrap_or_default().to_string();
+                let result = match op.as_str() {
+                    "split" => {
+                        let at = req["at"].as_f64().context("'at' (seconds) required")?;
+                        let new_id = crate::document::split_clip(&mut p, &id, at)?;
+                        serde_json::json!({"ok": true, "new_id": new_id})
+                    }
+                    "ripple_delete" => {
+                        crate::document::ripple_delete(&mut p, &id)?;
+                        serde_json::json!({"ok": true})
+                    }
+                    "detach_audio" => {
+                        let new_id = crate::document::detach_audio(&mut p, &id)
+                            .context("clip is not a video clip")?;
+                        serde_json::json!({"ok": true, "new_id": new_id})
+                    }
+                    "move_to_lane" => {
+                        let lane = req["lane"].as_u64().context("'lane' required")? as usize;
+                        let at = req["at"].as_f64().context("'at' (seconds) required")?;
+                        crate::document::move_clip_to_lane(&mut p, &id, lane, at)?;
+                        serde_json::json!({"ok": true})
+                    }
+                    other => anyhow::bail!(
+                        "unknown op {other:?} (split, ripple_delete, detach_audio, move_to_lane)"
+                    ),
+                };
+                p.validate()?;
+                std::fs::write(&path, p.to_json())?;
+                Ok(result)
+            }) {
+                Ok(v) => json_response(200, v.to_string()),
+                Err(e) => json_response(400, format!(r#"{{"error":{:?}}}"#, e.to_string())),
+            },
             (Method::Get, "/status") => match load() {
                 Ok(p) => json_response(
                     200,
