@@ -1250,7 +1250,7 @@ dependencies = [
 
 [[package]]
 name = "dualcut-engine"
-version = "0.21.1"
+version = "0.22.0"
 dependencies = [
  "anyhow",
  "gst-plugin-gtk4",
