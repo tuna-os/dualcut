@@ -8,4 +8,4 @@ cd "$(dirname "$0")/.."
 rsync -az --delete --exclude target --exclude out --exclude .flatpak-builder \
   ./ "$HOST:dev/dualcut/"
 ARGS=${*:-"build --features preview,scripting,vector"}
-ssh "$HOST" "distrobox enter gtkbuild -- bash -lc 'cd ~/dev/dualcut/engine && cargo $ARGS'"
+ssh "$HOST" "distrobox enter gtkbuild-f44 -- bash -c 'cd ~/dev/dualcut/engine && CARGO_TARGET_DIR=target-f44 cargo $ARGS'"

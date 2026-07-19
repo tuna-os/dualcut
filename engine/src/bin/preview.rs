@@ -2749,22 +2749,22 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     clips_box.set_margin_top(6);
     clips_box.set_margin_start(6);
     clips_box.set_margin_end(6);
-    let left_tabs = gtk::Notebook::new();
-    left_tabs.append_page(&clips_box, Some(&gtk::Label::new(Some("Clips"))));
-    left_tabs.append_page(&media_scroll, Some(&gtk::Label::new(Some("Library"))));
-    left_tabs.append_page(&templates_scroll, Some(&gtk::Label::new(Some("Templates"))));
-    left_tabs.append_page(&code_page, Some(&gtk::Label::new(Some("Code"))));
+    let left_stack = adw::ViewStack::new();
+    left_stack.add_titled(&clips_box, Some("clips"), "Clips");
+    left_stack.add_titled(&media_scroll, Some("library"), "Library");
+    left_stack.add_titled(&templates_scroll, Some("templates"), "Templates");
+    left_stack.add_titled(&code_page, Some("code"), "Code");
     #[cfg(feature = "scripting")]
     {
         // Progressive disclosure (#22): Script is power-user surface,
         // hidden unless enabled in Preferences.
         let script_page = build_script_panel(&editor);
-        left_tabs.append_page(&script_page, Some(&gtk::Label::new(Some("Script"))));
-        script_page.set_visible(prefs_show_script());
+        let script_stack_page = left_stack.add_titled(&script_page, Some("script"), "Script");
+        script_stack_page.set_visible(prefs_show_script());
         let a = gtk::gio::SimpleAction::new("preferences", None);
         {
             let editor = editor.clone();
-            let script_page = script_page.clone();
+            let script_stack_page = script_stack_page.clone();
             a.connect_activate(move |_, _| {
                 let dialog = adw::PreferencesDialog::new();
                 let page = adw::PreferencesPage::new();
@@ -2775,9 +2775,9 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                     .build();
                 row.set_active(prefs_show_script());
                 {
-                    let script_page = script_page.clone();
+                    let script_stack_page = script_stack_page.clone();
                     row.connect_active_notify(move |r| {
-                        script_page.set_visible(r.is_active());
+                        script_stack_page.set_visible(r.is_active());
                         prefs_set_show_script(r.is_active());
                     });
                 }
@@ -2789,6 +2789,14 @@ fn build_ui(app: &adw::Application) -> Result<()> {
         }
         app.add_action(&a);
     }
+    let left_switcher = adw::InlineViewSwitcher::builder().stack(&left_stack).build();
+    left_switcher.set_margin_top(6);
+    left_switcher.set_margin_start(6);
+    left_switcher.set_margin_end(6);
+    let left_tabs = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    left_tabs.append(&left_switcher);
+    left_stack.set_vexpand(true);
+    left_tabs.append(&left_stack);
     left_tabs.set_size_request(260, -1);
 
     // Right: parameters (Inspect | Script), as before.
@@ -3000,20 +3008,34 @@ fn build_ui(app: &adw::Application) -> Result<()> {
         {
             let editor = editor.clone();
             a.connect_activate(move |_, _| {
-                let dialog = adw::AlertDialog::new(
-                    Some("Keyboard Shortcuts"),
-                    Some(
-                        "Space — play / pause\n\
-                         ← / → — step one frame\n\
-                         Home / End — go to start / end\n\
-                         Ctrl+Z — undo\n\
-                         Ctrl+Shift+Z or Ctrl+Y — redo\n\
-                         Drag clip — move (vertical: change lane)\n\
-                         Drag clip right edge — trim\n\
-                         Drop files — import into library",
-                    ),
-                );
-                dialog.add_response("ok", "Close");
+                let dialog = adw::ShortcutsDialog::new();
+                let playback = adw::ShortcutsSection::new(Some("Playback"));
+                for (title, accel) in [
+                    ("Play / Pause", "space"),
+                    ("Step one frame back / forward", "Left Right"),
+                    ("Go to start / end", "Home End"),
+                ] {
+                    playback.add(adw::ShortcutsItem::new(title, accel));
+                }
+                dialog.add(playback);
+                let editing = adw::ShortcutsSection::new(Some("Editing"));
+                for (title, accel) in [
+                    ("Undo", "<Ctrl>Z"),
+                    ("Redo", "<Ctrl><Shift>Z <Ctrl>Y"),
+                    ("Delete selected clips", "Delete"),
+                ] {
+                    editing.add(adw::ShortcutsItem::new(title, accel));
+                }
+                dialog.add(editing);
+                let mouse = adw::ShortcutsSection::new(Some("Mouse"));
+                for (title, accel) in [
+                    ("Move clip (vertical: change lane)", ""),
+                    ("Trim: drag clip's right edge", ""),
+                    ("Import: drop files on the window", ""),
+                ] {
+                    mouse.add(adw::ShortcutsItem::new(title, accel));
+                }
+                dialog.add(mouse);
                 dialog.present(editor.window().as_ref());
             });
         }
@@ -3043,9 +3065,9 @@ fn build_ui(app: &adw::Application) -> Result<()> {
             steps.push(("editor-overview", Box::new(|| {})));
             {
                 let editor = editor.clone();
-                let tabs2 = left_tabs.clone();
+                let tabs2 = left_stack.clone();
                 steps.push(("library", Box::new(move || {
-                    tabs2.set_current_page(Some(1));
+                    tabs2.set_visible_child_name("library");
                     let project = editor.state.borrow().project.clone();
                     if let Some(mut project) = project {
                         project.library =
@@ -3055,18 +3077,18 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                 })));
             }
             {
-                let tabs = left_tabs.clone();
-                steps.push(("templates", Box::new(move || tabs.set_current_page(Some(2)))));
+                let tabs = left_stack.clone();
+                steps.push(("templates", Box::new(move || tabs.set_visible_child_name("templates"))));
             }
             {
-                let tabs = left_tabs.clone();
-                steps.push(("code-view", Box::new(move || tabs.set_current_page(Some(3)))));
+                let tabs = left_stack.clone();
+                steps.push(("code-view", Box::new(move || tabs.set_visible_child_name("code"))));
             }
             {
                 let editor = editor.clone();
-                let tabs = left_tabs.clone();
+                let tabs = left_stack.clone();
                 steps.push(("clip-inspector", Box::new(move || {
-                    tabs.set_current_page(Some(0));
+                    tabs.set_visible_child_name("clips");
                     editor.state.borrow_mut().selected = Some("media-ball".into());
                     editor.rebuild_inspector();
                 })));

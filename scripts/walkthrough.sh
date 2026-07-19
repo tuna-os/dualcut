@@ -40,7 +40,8 @@ EOF
 }
 
 run_pass() { # run_pass [project-file]
-  DISPLAY=$DISPLAY_NUM DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
+  GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=$DISPLAY_NUM \
+    DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
     DUALCUT_API_PORT=0 DUALCUT_WALKTHROUGH=1 "$BIN" "$@" 2>/dev/null |
     while read -r line; do
       case "$line" in
