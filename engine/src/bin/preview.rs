@@ -25,7 +25,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::SystemTime;
 
-const SCENE_PX_PER_SEC: f64 = 42.0;
+const DEFAULT_PPS: f64 = 42.0;
 
 fn main() -> glib::ExitCode {
     let app = adw::Application::builder()
@@ -51,6 +51,8 @@ struct AppState {
     mtime: Option<SystemTime>,
     duration: f64,
     selected: Option<String>,
+    /// Timeline zoom, pixels per second.
+    pps: f64,
     undo: Vec<String>,
     redo: Vec<String>,
     /// Set while the app itself writes the file, to skip one reload cycle.
@@ -112,6 +114,7 @@ struct Ui {
     media_grid: gtk::FlowBox,
     media_empty: gtk::Box,
     toasts: adw::ToastOverlay,
+    ruler: std::cell::RefCell<Option<gtk::DrawingArea>>,
     templates_list: gtk::ListBox,
     code_buffer: gtk::TextBuffer,
 }
@@ -359,67 +362,76 @@ impl Editor {
         while let Some(child) = ui.strip.first_child() {
             ui.strip.remove(&child);
         }
-        let project = {
+        let (project, pps) = {
             let st = self.state.borrow();
-            st.project.clone()
+            (st.project.clone(), st.pps)
         };
         let Some(project) = project else { return };
         let cache = self.base_dir().join(".dualcut-cache");
         self.spawn_thumbnail_worker(&project, &cache);
 
-        let scene_row = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-        for (i, scene) in project.scenes.iter().enumerate() {
-            let label = if scene.name.is_empty() { &scene.id } else { &scene.name };
-            let button = gtk::Button::with_label(&format!("{label}\n{:.1}s", scene.duration));
-            button.set_size_request((scene.duration * SCENE_PX_PER_SEC) as i32, 48);
-            button.set_tooltip_text(Some(&scene.id));
-            if let Some(thumb) = scene_thumb(&project, scene, &cache, &self.base_dir()) {
-                let content = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-                let pic = gtk::Picture::for_filename(&thumb);
-                pic.set_size_request(64, 36);
-                content.append(&pic);
-                let lbl = gtk::Label::new(Some(&format!("{label}\n{:.1}s", scene.duration)));
-                content.append(&lbl);
-                button.set_child(Some(&content));
-            }
-            let offset = project.scene_offset(i);
+        // Compact scene ruler: one thin strip showing scene segments and
+        // the playhead — scene blocks no longer eat timeline height
+        // (#19, #21). Click seeks and selects the scene under the click.
+        let ruler = gtk::DrawingArea::new();
+        ruler.set_content_height(26);
+        ruler.set_content_width((project.duration() * pps) as i32 + 40);
+        {
+            let project = project.clone();
+            let pipeline = self.state.borrow().pipeline.clone();
             let this = self.clone();
-            let scene_id = scene.id.clone();
-            button.connect_clicked(move |_| {
-                seek_to(&this.state.borrow().pipeline, offset);
-                this.state.borrow_mut().selected = Some(format!("scene:{scene_id}"));
+            ruler.set_draw_func(move |_, cr, w, h| {
+                let (w, h) = (w as f64, h as f64);
+                cr.set_source_rgb(0.12, 0.12, 0.14);
+                let _ = cr.paint();
+                let palette = [(0.32, 0.41, 0.94), (0.36, 0.83, 0.62), (0.90, 0.65, 0.04), (0.79, 0.38, 0.68)];
+                let selected = this.state.borrow().selected.clone();
+                for (i, scene) in project.scenes.iter().enumerate() {
+                    let x0 = project.scene_offset(i) * pps;
+                    let x1 = x0 + scene.duration * pps;
+                    let (r, g, b) = palette[i % palette.len()];
+                    let sel = selected.as_deref() == Some(&format!("scene:{}", scene.id));
+                    cr.set_source_rgba(r, g, b, if sel { 0.9 } else { 0.55 });
+                    cr.rectangle(x0 + 1.0, 2.0, (x1 - x0 - 2.0).max(1.0), h - 4.0);
+                    let _ = cr.fill();
+                    cr.set_source_rgb(1.0, 1.0, 1.0);
+                    cr.move_to(x0 + 6.0, h - 8.0);
+                    let label = if scene.name.is_empty() { &scene.id } else { &scene.name };
+                    cr.set_font_size(11.0);
+                    let _ = cr.show_text(&format!("{label} · {:.1}s", scene.duration));
+                }
+                // Playhead.
+                if let Some(pos) = pipeline.query_position::<gst::ClockTime>() {
+                    let x = pos.nseconds() as f64 / 1e9 * pps;
+                    if x <= w {
+                        cr.set_source_rgb(0.95, 0.25, 0.25);
+                        cr.rectangle(x - 0.5, 0.0, 1.5, h);
+                        let _ = cr.fill();
+                    }
+                }
+            });
+        }
+        {
+            let this = self.clone();
+            let project = project.clone();
+            let click = gtk::GestureClick::new();
+            click.connect_pressed(move |_, _, x, _| {
+                let time = (x / pps).max(0.0);
+                seek_to(&this.state.borrow().pipeline, time.min(project.duration()));
+                let index = (0..project.scenes.len())
+                    .rev()
+                    .find(|&i| time >= project.scene_offset(i))
+                    .unwrap_or(0);
+                let id = project.scenes[index].id.clone();
+                this.state.borrow_mut().selected = Some(format!("scene:{id}"));
                 this.rebuild_inspector();
             });
-
-            // Scene cell: block + reorder arrows.
-            let cell = gtk::Box::new(gtk::Orientation::Vertical, 2);
-            cell.append(&button);
-            let arrows = gtk::Box::new(gtk::Orientation::Horizontal, 2);
-            arrows.set_halign(gtk::Align::Center);
-            for (glyph, delta) in [("‹", -1i64), ("›", 1i64)] {
-                let target = i as i64 + delta;
-                if target < 0 || target >= project.scenes.len() as i64 {
-                    continue;
-                }
-                let b = gtk::Button::with_label(glyph);
-                b.add_css_class("flat");
-                b.set_tooltip_text(Some("Reorder scene"));
-                b.update_property(&[gtk::accessible::Property::Label(
-                    if delta < 0 { "Move scene earlier" } else { "Move scene later" },
-                )]);
-                let this = self.clone();
-                let project_snapshot = project.clone();
-                b.connect_clicked(move |_| {
-                    let mut project = project_snapshot.clone();
-                    project.scenes.swap(i, target as usize);
-                    this.commit_document(project);
-                });
-                arrows.append(&b);
-            }
-            cell.append(&arrows);
-            scene_row.append(&cell);
+            ruler.add_controller(click);
         }
-        ui.strip.append(&scene_row);
+        ui.strip.append(&ruler);
+        *ui.ruler.borrow_mut() = Some(ruler.clone());
+
+        // (Scene blocks replaced by the ruler above.)
 
         // Scene-layer lanes: one row per layer slot, clips positioned at
         // absolute time (scene offset + clip start). Dragging retimes the
@@ -432,7 +444,7 @@ impl Editor {
             tag.set_width_chars(14);
             row.append(&tag);
             let lane = gtk::Fixed::new();
-            lane.set_size_request((project.duration() * SCENE_PX_PER_SEC) as i32 + 40, 30);
+            lane.set_size_request((project.duration() * pps) as i32 + 40, 30);
             for (si, scene) in project.scenes.iter().enumerate() {
                 let Some(clip) = scene.layers.get(li) else { continue };
                 let offset = project.scene_offset(si);
@@ -465,7 +477,7 @@ impl Editor {
             tag.set_width_chars(14);
             row.append(&tag);
             let lane = gtk::Fixed::new();
-            lane.set_size_request((project.duration() * SCENE_PX_PER_SEC) as i32 + 40, 30);
+            lane.set_size_request((project.duration() * pps) as i32 + 40, 30);
             for clip in &track.clips {
                 self.add_lane_clip(
                     &lane,
@@ -496,9 +508,9 @@ impl Editor {
         scene_relative: bool,
         lane_index: usize,
     ) {
-        let project = {
+        let (project, pps) = {
             let st = self.state.borrow();
-            st.project.clone()
+            (st.project.clone(), st.pps)
         };
         let Some(project) = project else { return };
         let cache = self.base_dir().join(".dualcut-cache");
@@ -514,7 +526,7 @@ impl Editor {
             document::Element::CompRef { .. } => "clip-compref",
             document::Element::Test { .. } => "clip-test",
         });
-        let width_px = ((duration * SCENE_PX_PER_SEC) as i32).max(30);
+        let width_px = ((duration * pps) as i32).max(30);
         button.set_size_request(width_px, 28);
         button.set_tooltip_text(Some("Drag to move · right edge trims"));
         if let document::Element::Audio { src, .. } = &clip.element
@@ -527,7 +539,7 @@ impl Editor {
                     button.set_tooltip_text(Some(&clip.id));
                 }
             }
-        lane.put(&button, abs_start * SCENE_PX_PER_SEC, 1.0);
+        lane.put(&button, abs_start * pps, 1.0);
 
         {
             let this = self.clone();
@@ -544,12 +556,12 @@ impl Editor {
 
         let drag = gtk::GestureDrag::new();
         // (orig_x_px, trim_mode)
-        let dragmeta = Rc::new(std::cell::Cell::new((abs_start * SCENE_PX_PER_SEC, false)));
+        let dragmeta = Rc::new(std::cell::Cell::new((abs_start * pps, false)));
         {
             let dragmeta = dragmeta.clone();
             drag.connect_drag_begin(move |_, sx, _| {
                 let trim = sx > (width_px as f64) - 12.0;
-                dragmeta.set((abs_start * SCENE_PX_PER_SEC, trim));
+                dragmeta.set((abs_start * pps, trim));
             });
         }
         {
@@ -557,6 +569,11 @@ impl Editor {
             let button = button.clone();
             let dragmeta = dragmeta.clone();
             drag.connect_drag_update(move |_, dx, _| {
+                // A click is not a drag: nothing moves inside the
+                // threshold (#20).
+                if dx.abs() < 6.0 {
+                    return;
+                }
                 let (ox, trim) = dragmeta.get();
                 if trim {
                     button.set_size_request(((width_px as f64 + dx) as i32).max(20), 28);
@@ -571,7 +588,10 @@ impl Editor {
             let dragmeta = dragmeta.clone();
             let project_snapshot = project.clone();
             drag.connect_drag_end(move |_, dx, dy| {
-                if dx.abs() < 2.0 && dy.abs() < 2.0 {
+                if dx.abs() < 6.0 && dy.abs() < 6.0 {
+                    // Treat as a click: select the clip (#20).
+                    this.state.borrow_mut().selected = Some(id.clone());
+                    this.rebuild_inspector();
                     return;
                 }
                 let (ox, trim) = dragmeta.get();
@@ -583,7 +603,7 @@ impl Editor {
                     let target = (lane_index as i64 + lane_delta)
                         .clamp(0, document::lane_count(&project) as i64 - 1)
                         as usize;
-                    let raw_abs = ((ox + dx).max(0.0)) / SCENE_PX_PER_SEC;
+                    let raw_abs = ((ox + dx).max(0.0)) / pps;
                     let snapped = snap_time(&project, raw_abs);
                     match move_clip_to_lane(&mut project, &id, target, snapped) {
                         Ok(()) => this.commit_document(project),
@@ -592,7 +612,7 @@ impl Editor {
                     return;
                 }
                 if trim {
-                    let new_dur = (duration + dx / SCENE_PX_PER_SEC).max(0.1);
+                    let new_dur = (duration + dx / pps).max(0.1);
                     let snapped_end = if scene_relative {
                         new_dur
                     } else {
@@ -602,7 +622,7 @@ impl Editor {
                         c.duration = snapped_end.max(0.1);
                     }
                 } else {
-                    let raw_abs = ((ox + dx).max(0.0)) / SCENE_PX_PER_SEC;
+                    let raw_abs = ((ox + dx).max(0.0)) / pps;
                     let snapped = snap_time(&project, raw_abs);
                     let new_start = to_start(snapped);
                     if let Some(c) = find_clip_mut(&mut project, &id) {
@@ -704,6 +724,7 @@ impl Editor {
             match rx.try_recv() {
                 Ok(()) => {
                     this.rebuild_strip();
+                    this.rebuild_media();
                     glib::ControlFlow::Break
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -927,6 +948,25 @@ impl Editor {
         tr_row.append(&dd);
         tr_row.append(&tdur);
         form.append(&tr_row);
+        let order = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let index = project.scenes.iter().position(|s| s.id == scene.id).unwrap_or(0);
+        for (label, delta) in [("← Move earlier", -1i64), ("Move later →", 1i64)] {
+            let target = index as i64 + delta;
+            if target < 0 || target >= project.scenes.len() as i64 {
+                continue;
+            }
+            let b = gtk::Button::with_label(label);
+            let this = self.clone();
+            let project = project.clone();
+            b.connect_clicked(move |_| {
+                let mut project = project.clone();
+                project.scenes.swap(index, target as usize);
+                this.commit_document(project);
+            });
+            order.append(&b);
+        }
+        form.append(&order);
+
         let is_first = project.scenes.first().map(|s| s.id == scene.id).unwrap_or(false);
         if is_first {
             let hint = gtk::Label::new(Some("(first scene has no incoming transition)"));
@@ -1631,27 +1671,6 @@ impl Editor {
     }
 }
 
-/// Cached thumbnail path for a scene's first media layer, if generated.
-fn scene_thumb(
-    project: &Project,
-    scene: &document::Scene,
-    cache: &std::path::Path,
-    base_dir: &std::path::Path,
-) -> Option<std::path::PathBuf> {
-    let _ = project;
-    for clip in &scene.layers {
-        if let document::Element::Video { src, .. } | document::Element::Image { src } = &clip.element {
-            let uri = media_uri(src, base_dir)?;
-            let file = cache.join(format!("thumb-{:016x}.png", fx_hash(&uri)));
-            if file.exists() {
-                return Some(file);
-            }
-        }
-    }
-    None
-}
-
-/// Composition-space bounding box for a clip (0 width/height = full frame).
 fn clip_box(project: &Project, clip: &document::Clip) -> (f64, f64, f64, f64) {
     let t = &clip.transform;
     let w = if t.width > 0.0 { t.width } else { project.meta.width as f64 };
@@ -2084,6 +2103,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
             mtime,
             duration,
             selected: None,
+            pps: DEFAULT_PPS,
             undo: Vec::new(),
             redo: Vec::new(),
             self_write: false,
@@ -2201,7 +2221,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
             let editor = editor.clone();
             let orig = orig.clone();
             drag.connect_drag_end(move |_, dx, dy| {
-                if dx.abs() < 2.0 && dy.abs() < 2.0 {
+                if dx.abs() < 6.0 && dy.abs() < 6.0 {
                     return;
                 }
                 let (ox, oy, scale) = orig.get();
@@ -2266,6 +2286,11 @@ fn build_ui(app: &adw::Application) -> Result<()> {
             if editor.state.borrow().selected.is_some() {
                 sel_canvas.queue_draw();
             }
+            // Keep the ruler playhead moving.
+            if let Some(ui) = editor.ui.borrow().as_ref()
+                && let Some(ruler) = ui.ruler.borrow().as_ref() {
+                    ruler.queue_draw();
+                }
             {
                 let st = editor.state.borrow();
                 if let Some(pos) = st.pipeline.query_position::<gst::ClockTime>() {
@@ -2450,10 +2475,35 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     strip_scroll.set_child(Some(&strip));
     strip_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
     strip_scroll.set_min_content_height(150);
-    // Bottom pane is a resizable Paned child; the toggle hides it.
+    // Bottom pane: zoom toolbar + timeline, resizable; the toggle hides it.
+    let bottom_box = gtk::Box::new(gtk::Orientation::Vertical, 0);
     {
-        let strip_scroll = strip_scroll.clone();
-        timeline_toggle.connect_toggled(move |b| strip_scroll.set_visible(b.is_active()));
+        let toolbar = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        toolbar.set_margin_start(12);
+        toolbar.set_margin_end(12);
+        toolbar.set_margin_top(4);
+        let zl = gtk::Label::new(Some("Zoom"));
+        zl.add_css_class("dim-label");
+        toolbar.append(&zl);
+        let zoom = gtk::Scale::with_range(gtk::Orientation::Horizontal, 8.0, 240.0, 2.0);
+        zoom.set_value(DEFAULT_PPS);
+        zoom.set_size_request(180, -1);
+        zoom.update_property(&[gtk::accessible::Property::Label("Timeline zoom")]);
+        {
+            let editor = editor.clone();
+            zoom.connect_change_value(move |_, _, value| {
+                editor.state.borrow_mut().pps = value.clamp(8.0, 240.0);
+                editor.rebuild_strip();
+                glib::Propagation::Proceed
+            });
+        }
+        toolbar.append(&zoom);
+        bottom_box.append(&toolbar);
+    }
+    bottom_box.append(&strip_scroll);
+    {
+        let bottom_box = bottom_box.clone();
+        timeline_toggle.connect_toggled(move |b| bottom_box.set_visible(b.is_active()));
     }
 
     // Center: preview + transport.
@@ -2586,7 +2636,7 @@ add files to import first"));
 
     let vpaned = gtk::Paned::new(gtk::Orientation::Vertical);
     vpaned.set_start_child(Some(&outer));
-    vpaned.set_end_child(Some(&strip_scroll));
+    vpaned.set_end_child(Some(&bottom_box));
     vpaned.set_resize_start_child(true);
     vpaned.set_shrink_start_child(false);
     vpaned.set_shrink_end_child(false);
@@ -2883,7 +2933,18 @@ add files to import first"));
     start_paused(&pipeline)?;
 
     *editor.ui.borrow_mut() =
-        Some(Ui { picture, seek, strip, inspector, media_grid, media_empty, toasts: toasts.clone(), templates_list, code_buffer });
+        Some(Ui {
+            picture,
+            seek,
+            strip,
+            inspector,
+            media_grid,
+            media_empty,
+            toasts: toasts.clone(),
+            ruler: std::cell::RefCell::new(None),
+            templates_list,
+            code_buffer,
+        });
     editor.rebuild_strip();
     editor.rebuild_inspector();
     editor.rebuild_media();

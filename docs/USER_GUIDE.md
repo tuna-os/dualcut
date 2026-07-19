@@ -73,7 +73,7 @@ audio fades) or hand-tune animations per property; stack **effects**
 
 ## Scenes and transitions
 
-Click a scene block in the timeline to edit its duration and the
+Click a scene segment in the timeline ruler to edit its duration and the
 transition from the previous scene — crossfade, wipes, box, iris, or
 clock, with an adjustable overlap. Audio blends across transitions
 automatically.

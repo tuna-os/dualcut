@@ -46,6 +46,20 @@
       ]
     },
     {
+      "name": "gst-libav",
+      "buildsystem": "meson",
+      "config-opts": [
+        "-Ddoc=disabled"
+      ],
+      "sources": [
+        {
+          "type": "archive",
+          "url": "https://gstreamer.freedesktop.org/src/gst-libav/gst-libav-1.24.2.tar.xz",
+          "sha256": "962838648e14ce8a78322ab16f84c7d84d86a6d7bebb6574ac05dea84a7c7c9b"
+        }
+      ]
+    },
+    {
       "name": "dualcut",
       "buildsystem": "simple",
       "build-commands": [
@@ -82,5 +96,17 @@
         }
       }
     }
+  ],
+  "add-extensions": {
+    "org.freedesktop.Platform.ffmpeg-full": {
+      "version": "25.08",
+      "directory": "lib/ffmpeg",
+      "add-ld-path": ".",
+      "no-autodownload": false,
+      "autodelete": false
+    }
+  },
+  "cleanup-commands": [
+    "mkdir -p /app/lib/ffmpeg"
   ]
 }
