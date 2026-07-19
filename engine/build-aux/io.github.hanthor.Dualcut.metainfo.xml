@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.21.1" date="2026-07-19">
+      <description>
+        <p>Agent parity: POST /op endpoint (split/ripple/detach/move), docs sync; guide-job checkout fix.</p>
+      </description>
+    </release>
     <release version="0.21.0" date="2026-07-19">
       <description>
         <p>Wave 3: green-screen chroma key, crop, 3-band EQ, compressor.</p>
