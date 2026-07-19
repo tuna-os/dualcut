@@ -152,9 +152,9 @@ export function Timeline() {
       <div className="timeline-toolbar">
         <button onClick={addTrack}>+ Track</button>
         <div className="spacer" />
-        <button onClick={() => setPxPerSec(pxPerSec / 1.4)}>−</button>
+        <button title="Zoom out" aria-label="Zoom out" onClick={() => setPxPerSec(pxPerSec / 1.4)}>−</button>
         <span className="zoom-label">{Math.round(pxPerSec)} px/s</span>
-        <button onClick={() => setPxPerSec(pxPerSec * 1.4)}>+</button>
+        <button title="Zoom in" aria-label="Zoom in" onClick={() => setPxPerSec(pxPerSec * 1.4)}>+</button>
       </div>
       <div className="timeline-scroll">
         <div className="timeline-inner" style={{ width: width + 160 }}>
@@ -165,6 +165,7 @@ export function Timeline() {
                 <button
                   className={`mini ${track.hidden ? 'off' : ''}`}
                   title="Toggle visibility"
+                  aria-label={track.hidden ? 'Show track' : 'Hide track'}
                   onClick={() => toggle(track.id, 'hidden')}
                 >
                   {track.hidden ? '🙈' : '👁'}
@@ -172,11 +173,12 @@ export function Timeline() {
                 <button
                   className={`mini ${track.muted ? 'off' : ''}`}
                   title="Toggle mute"
+                  aria-label={track.muted ? 'Unmute track' : 'Mute track'}
                   onClick={() => toggle(track.id, 'muted')}
                 >
                   {track.muted ? '🔇' : '🔊'}
                 </button>
-                <button className="mini danger" title="Delete track" onClick={() => removeTrack(track.id)}>
+                <button className="mini danger" title="Delete track" aria-label="Delete track" onClick={() => removeTrack(track.id)}>
                   ✕
                 </button>
               </div>

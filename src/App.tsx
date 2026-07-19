@@ -88,10 +88,10 @@ function TopBar() {
       <span className="logo">▞ dualcut</span>
       <span className="title">{comp.meta.title}</span>
       <div className="spacer" />
-      <button title="Undo (Ctrl+Z)" disabled={!canUndo} onClick={undo}>↩</button>
-      <button title="Redo (Ctrl+Shift+Z)" disabled={!canRedo} onClick={redo}>↪</button>
+      <button title="Undo (Ctrl+Z)" aria-label="Undo" disabled={!canUndo} onClick={undo}><span aria-hidden="true">↩</span></button>
+      <button title="Redo (Ctrl+Shift+Z)" aria-label="Redo" disabled={!canRedo} onClick={redo}><span aria-hidden="true">↪</span></button>
       <div className="transport">
-        <button title="Go to start (Home)" onClick={() => seek(0)}>⏮</button>
+        <button title="Go to start (Home)" aria-label="Go to start" onClick={() => seek(0)}><span aria-hidden="true">⏮</span></button>
         <button
           className="play"
           title="Play/Pause (Space)"

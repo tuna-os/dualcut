@@ -118,7 +118,7 @@ function AnimRow({ anim, index, edit }: { anim: Anim; index: number; edit: (fn: 
       <Num label="Start" value={anim.start} step={0.1} onChange={(v) => setA((a) => (a.start = v))} />
       <Num label="End" value={anim.end} step={0.1} onChange={(v) => setA((a) => (a.end = v))} />
       <Select label="Ease" value={anim.easing} options={EASINGS} onChange={(v) => setA((a) => (a.easing = v))} />
-      <button className="mini danger" onClick={() => edit((c) => c.animations.splice(index, 1))}>✕</button>
+      <button className="mini danger" title="Delete animation" aria-label="Delete animation" onClick={() => edit((c) => c.animations.splice(index, 1))}><span aria-hidden="true">✕</span></button>
     </div>
   );
 }
@@ -213,6 +213,7 @@ export function Inspector() {
         <button
           className="mini"
           title="Duplicate clip"
+          aria-label="Duplicate clip"
           onClick={() => {
             const copy = structuredClone(clip);
             copy.id = newId('clip');
@@ -230,6 +231,7 @@ export function Inspector() {
         <button
           className="mini danger"
           title="Delete clip"
+          aria-label="Delete clip"
           onClick={() => {
             update((draft) => {
               const f = findClip(draft, clip.id);

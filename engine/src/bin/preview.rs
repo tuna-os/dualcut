@@ -111,6 +111,7 @@ struct Ui {
     inspector: gtk::Box,
     media_grid: gtk::FlowBox,
     media_empty: gtk::Box,
+    toasts: adw::ToastOverlay,
     templates_list: gtk::ListBox,
     code_buffer: gtk::TextBuffer,
 }
@@ -189,6 +190,18 @@ impl Editor {
                     }
                 }
         });
+    }
+
+    /// Transient "X deleted — Undo" toast (deletes are silent otherwise).
+    fn toast_undo(self: &Rc<Self>, message: &str) {
+        let ui = self.ui.borrow();
+        let Some(ui) = ui.as_ref() else { return };
+        let toast = adw::Toast::new(message);
+        toast.set_button_label(Some("Undo"));
+        toast.set_timeout(5);
+        let this = self.clone();
+        toast.connect_button_clicked(move |_| this.undo());
+        ui.toasts.add_toast(toast);
     }
 
     fn window(&self) -> Option<gtk::Window> {
@@ -391,6 +404,9 @@ impl Editor {
                 let b = gtk::Button::with_label(glyph);
                 b.add_css_class("flat");
                 b.set_tooltip_text(Some("Reorder scene"));
+                b.update_property(&[gtk::accessible::Property::Label(
+                    if delta < 0 { "Move scene earlier" } else { "Move scene later" },
+                )]);
                 let this = self.clone();
                 let project_snapshot = project.clone();
                 b.connect_clicked(move |_| {
@@ -768,6 +784,7 @@ impl Editor {
                                 if let Some(mut project) = project {
                                     project.library.retain(|e| e != &rel);
                                     this.commit_document(project);
+                                    this.toast_undo("Removed from library");
                                 }
                             }
                         });
@@ -1175,11 +1192,16 @@ impl Editor {
                     return;
                 }
                 let mut project = project_snapshot.clone();
+                let count = rows.len();
                 for row in rows {
                     remove_clip(&mut project, &ids[row.index() as usize]);
                 }
                 this.state.borrow_mut().selected = None;
                 this.commit_document(project);
+                this.toast_undo(&format!(
+                    "{count} clip{} deleted",
+                    if count == 1 { "" } else { "s" }
+                ));
             });
         }
         sel_ops.append(&del_sel);
@@ -1381,6 +1403,7 @@ impl Editor {
             row.append(&ease);
 
             let del = gtk::Button::from_icon_name("edit-delete-symbolic");
+            del.update_property(&[gtk::accessible::Property::Label("Delete animation")]);
             del.add_css_class("flat");
             {
                 let this = self.clone();
@@ -1530,6 +1553,7 @@ impl Editor {
                 }
             }
             let rm = gtk::Button::from_icon_name("window-close-symbolic");
+            rm.update_property(&[gtk::accessible::Property::Label("Remove effect")]);
             rm.add_css_class("flat");
             {
                 let this = self.clone();
@@ -1598,6 +1622,7 @@ impl Editor {
                 remove_clip(&mut project, &id);
                 this.state.borrow_mut().selected = None;
                 this.commit_document(project);
+                this.toast_undo(&format!("Clip {id:?} deleted"));
             });
         }
         actions.append(&delete);
@@ -2201,6 +2226,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     }
 
     let play = gtk::Button::from_icon_name("media-playback-start-symbolic");
+    play.update_property(&[gtk::accessible::Property::Label("Play/Pause")]);
     let time_label = gtk::Label::new(Some("0:00.0"));
     time_label.add_css_class("numeric");
     let seek = gtk::Scale::with_range(gtk::Orientation::Horizontal, 0.0, duration.max(0.1), 0.05);
@@ -2366,15 +2392,18 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     bar.pack_start(&import_btn);
     let left_toggle = gtk::ToggleButton::new();
     left_toggle.set_icon_name("sidebar-show-symbolic");
+    left_toggle.update_property(&[gtk::accessible::Property::Label("Toggle left panel")]);
     left_toggle.set_tooltip_text(Some("Toggle left panel (Library / Templates / Code / Script)"));
     left_toggle.set_active(true);
     bar.pack_start(&left_toggle);
     let timeline_toggle = gtk::ToggleButton::new();
     timeline_toggle.set_icon_name("view-continuous-symbolic");
+    timeline_toggle.update_property(&[gtk::accessible::Property::Label("Toggle timeline pane")]);
     timeline_toggle.set_tooltip_text(Some("Toggle timeline pane"));
     timeline_toggle.set_active(true);
     bar.pack_start(&timeline_toggle);
     let export = gtk::Button::from_icon_name("document-save-symbolic");
+    export.update_property(&[gtk::accessible::Property::Label("Export video")]);
     export.set_tooltip_text(Some("Export video"));
     {
         let editor = editor.clone();
@@ -2395,10 +2424,12 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     menu.append_section(None, &sec2);
     let burger = gtk::MenuButton::new();
     burger.set_icon_name("open-menu-symbolic");
+    burger.update_property(&[gtk::accessible::Property::Label("Main menu")]);
     burger.set_menu_model(Some(&menu));
     bar.pack_end(&burger);
     let right_toggle = gtk::ToggleButton::new();
     right_toggle.set_icon_name("sidebar-show-right-symbolic");
+    right_toggle.update_property(&[gtk::accessible::Property::Label("Toggle inspector panel")]);
     right_toggle.set_tooltip_text(Some("Toggle inspector panel"));
     right_toggle.set_active(true);
     bar.pack_end(&right_toggle);
@@ -2563,13 +2594,15 @@ add files to import first"));
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&bar);
     content.append(&vpaned);
+    let toasts = adw::ToastOverlay::new();
+    toasts.set_child(Some(&content));
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title(&window_title)
         .default_width(1120)
         .default_height(700)
-        .content(&content)
+        .content(&toasts)
         .build();
 
     {
@@ -2577,6 +2610,12 @@ add files to import first"));
         let editor = editor.clone();
         let play_btn = play.clone();
         controller.connect_key_pressed(move |_, key, _, modifier| {
+            if modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK)
+                && (key == gtk::gdk::Key::y || key == gtk::gdk::Key::Y)
+            {
+                editor.redo();
+                return glib::Propagation::Stop;
+            }
             if modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK)
                 && (key == gtk::gdk::Key::z || key == gtk::gdk::Key::Z)
             {
@@ -2619,6 +2658,16 @@ add files to import first"));
                     }
                     gtk::gdk::Key::Home => {
                         seek_to(&pipeline, 0.0);
+                        return glib::Propagation::Stop;
+                    }
+                    gtk::gdk::Key::End => {
+                        let end = editor
+                            .state
+                            .borrow()
+                            .project
+                            .as_ref()
+                            .map_or(0.0, |p| p.duration());
+                        seek_to(&pipeline, (end - 0.05).max(0.0));
                         return glib::Propagation::Stop;
                     }
                     _ => {}
@@ -2693,11 +2742,31 @@ add files to import first"));
             });
         }
         app.add_action(&a);
-        for stub in ["preferences", "shortcuts"] {
-            let a = make(stub);
-            a.set_enabled(false);
-            app.add_action(&a);
+        let a = make("shortcuts");
+        {
+            let editor = editor.clone();
+            a.connect_activate(move |_, _| {
+                let dialog = adw::AlertDialog::new(
+                    Some("Keyboard Shortcuts"),
+                    Some(
+                        "Space — play / pause\n\
+                         ← / → — step one frame\n\
+                         Home / End — go to start / end\n\
+                         Ctrl+Z — undo\n\
+                         Ctrl+Shift+Z or Ctrl+Y — redo\n\
+                         Drag clip — move (vertical: change lane)\n\
+                         Drag clip right edge — trim\n\
+                         Drop files — import into library",
+                    ),
+                );
+                dialog.add_response("ok", "Close");
+                dialog.present(editor.window().as_ref());
+            });
         }
+        app.add_action(&a);
+        let a = make("preferences");
+        a.set_enabled(false);
+        app.add_action(&a);
     }
 
     // UI smoke-test hook: DUALCUT_TEST_ACTION=<name> activates an app
@@ -2814,7 +2883,7 @@ add files to import first"));
     start_paused(&pipeline)?;
 
     *editor.ui.borrow_mut() =
-        Some(Ui { picture, seek, strip, inspector, media_grid, media_empty, templates_list, code_buffer });
+        Some(Ui { picture, seek, strip, inspector, media_grid, media_empty, toasts: toasts.clone(), templates_list, code_buffer });
     editor.rebuild_strip();
     editor.rebuild_inspector();
     editor.rebuild_media();

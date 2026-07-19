@@ -5,6 +5,10 @@
     "height": 720,
     "fps": 30
   },
+  "library": [
+    "assets/ball.mp4",
+    "assets/ticks.ogg"
+  ],
   "defs": {
     "lower-third": {
       "params": [
