@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.23.0" date="2026-07-19">
+      <description>
+        <p>Denoise effect (WebRTC noise suppression); speed control (constant rate) shipped and verified; keyframed ramps parked with a root-caused design writeup (#40).</p>
+      </description>
+    </release>
     <release version="0.22.0" date="2026-07-19">
       <description>
         <p>Speed control (rate), proxy media for smooth preview, export queue, Generate Captions menu action, project-open crash fix, thumbnail retry-storm fix, and a robust per-push CI gate (lint + unit + render-smoke + app-start).</p>
