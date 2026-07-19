@@ -35,6 +35,13 @@ and drop them anywhere on the window. Double-click a thumbnail to insert it into
 the scene under the playhead; right-click for *Add to Timeline* /
 *Remove from Library*.
 
+Imported videos are automatically transcoded in the background into
+lightweight **proxy media** (960px-wide, every frame a keyframe) stored
+in the project's `.dualcut-cache/` folder. The preview and timeline
+scrub through these proxies for smooth playback even with 4K footage,
+while exports always render from the original files at full quality.
+Turn this off with *Use proxy media* in Preferences.
+
 ![Library](guide/library.png)
 
 ## Templates

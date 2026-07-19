@@ -104,18 +104,72 @@ fn preview_scale() -> f64 {
 }
 
 fn prefs_set_preview_scale(value: f64) {
+    prefs_set("preview_scale", &value.to_string());
+}
+
+/// Preview-only proxy media (960px MJPEG transcodes) — on unless disabled.
+fn prefs_use_proxies() -> bool {
+    std::fs::read_to_string(prefs_file())
+        .map(|s| !s.lines().any(|l| l.trim() == "use_proxies=false"))
+        .unwrap_or(true)
+}
+
+fn prefs_set_use_proxies(value: bool) {
+    prefs_set("use_proxies", &value.to_string());
+}
+
+/// Rewrite one `key=value` line in the prefs file, preserving every other key.
+fn prefs_set(key: &str, value: &str) {
     let file = prefs_file();
     if let Some(dir) = file.parent() {
         let _ = std::fs::create_dir_all(dir);
     }
-    let show = prefs_show_script();
-    let _ = std::fs::write(&file, format!("show_script={show}\npreview_scale={value}\n"));
+    let prefix = format!("{key}=");
+    let mut lines: Vec<String> = std::fs::read_to_string(&file)
+        .unwrap_or_default()
+        .lines()
+        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with(&prefix))
+        .map(str::to_string)
+        .collect();
+    lines.push(format!("{key}={value}"));
+    let _ = std::fs::write(&file, lines.join("\n") + "\n");
+}
+
+/// Preview-only: swap video clip sources for their cached 960px proxies
+/// where one exists. Exports go through render_project on the untouched
+/// document, so originals are never affected.
+fn with_proxies(project: &Project, base_dir: &std::path::Path) -> Project {
+    let mut swapped = project.clone();
+    let cache = base_dir.join(".dualcut-cache");
+    let clips = swapped
+        .scenes
+        .iter_mut()
+        .flat_map(|s| s.layers.iter_mut())
+        .chain(swapped.overlays.iter_mut().flat_map(|t| t.clips.iter_mut()));
+    for clip in clips {
+        if let document::Element::Video { src, .. } = &mut clip.element
+            && let Some(uri) = media_uri(src, base_dir)
+            && uri.starts_with("file://")
+        {
+            let proxy = dualcut_engine::thumbs::proxy_path(&cache, &uri);
+            if proxy.exists() {
+                *src = proxy.display().to_string();
+            }
+        }
+    }
+    swapped
 }
 
 fn compile_project(project: &Project, base_dir: &std::path::Path) -> Result<ges::Timeline> {
-    // Preview pipelines render at reduced resolution (Preferences);
-    // exports go through render_project at full quality.
-    let compiled = mapping::compile_scaled(project, base_dir, preview_scale())?;
+    // Preview pipelines render at reduced resolution (Preferences) and
+    // read proxy media where available; exports go through render_project
+    // at full quality from the original sources.
+    let project = if prefs_use_proxies() {
+        std::borrow::Cow::Owned(with_proxies(project, base_dir))
+    } else {
+        std::borrow::Cow::Borrowed(project)
+    };
+    let compiled = mapping::compile_scaled(&project, base_dir, preview_scale())?;
     for warning in &compiled.warnings {
         eprintln!("warning: {warning}");
     }
@@ -764,6 +818,18 @@ impl Editor {
         let base_dir = self.base_dir();
         let mut thumbs: Vec<String> = Vec::new();
         let mut waves: Vec<String> = Vec::new();
+        let mut proxies: Vec<String> = Vec::new();
+        let want_proxies = prefs_use_proxies();
+        let queue_proxy = |uri: &str, proxies: &mut Vec<String>| {
+            if want_proxies
+                && uri.starts_with("file://")
+                && !dualcut_engine::thumbs::proxy_path(cache, uri).exists()
+                && !proxies.iter().any(|u| u == uri)
+                && !failed_proxies().lock().unwrap().contains(uri)
+            {
+                proxies.push(uri.to_string());
+            }
+        };
         let all_clips = project
             .scenes
             .iter()
@@ -771,10 +837,13 @@ impl Editor {
             .chain(project.overlays.iter().flat_map(|t| t.clips.iter()));
         for rel in &project.library {
             if let Some(uri) = media_uri(rel, &base_dir) {
-                let is_audio = matches!(
-                    rel.rsplit(".").next().unwrap_or("").to_lowercase().as_str(),
-                    "ogg" | "mp3" | "wav" | "flac"
-                );
+                let ext = rel.rsplit(".").next().unwrap_or("").to_lowercase();
+                let is_audio = matches!(ext.as_str(), "ogg" | "mp3" | "wav" | "flac");
+                let is_image =
+                    matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg");
+                if !is_audio && !is_image {
+                    queue_proxy(&uri, &mut proxies);
+                }
                 if is_audio {
                     if !cache.join(format!("wave-{:016x}.png", fx_hash(&uri))).exists() {
                         waves.push(uri);
@@ -786,7 +855,15 @@ impl Editor {
         }
         for clip in all_clips {
             match &clip.element {
-                document::Element::Video { src, .. } | document::Element::Image { src } => {
+                document::Element::Video { src, .. } => {
+                    if let Some(uri) = media_uri(src, &base_dir) {
+                        queue_proxy(&uri, &mut proxies);
+                        if !cache.join(format!("thumb-{:016x}.png", fx_hash(&uri))).exists() {
+                            thumbs.push(uri);
+                        }
+                    }
+                }
+                document::Element::Image { src } => {
                     if let Some(uri) = media_uri(src, &base_dir)
                         && !cache.join(format!("thumb-{:016x}.png", fx_hash(&uri))).exists() {
                             thumbs.push(uri);
@@ -813,17 +890,30 @@ impl Editor {
             })
             .map(|(n, _)| n.clone())
             .collect();
-        if thumbs.is_empty() && waves.is_empty() && tpl_missing.is_empty() {
+        if thumbs.is_empty() && waves.is_empty() && tpl_missing.is_empty() && proxies.is_empty()
+        {
             return;
         }
         let cache = cache.to_path_buf();
         let this = self.clone();
         let project_snapshot = project.clone();
-        let (tx, rx) = std::sync::mpsc::channel::<()>();
+        let (tx, rx) = std::sync::mpsc::channel::<bool>();
         std::thread::spawn(move || {
             for uri in thumbs {
                 if let Err(e) = dualcut_engine::thumbs::thumbnail_png(&cache, &uri) {
                     eprintln!("thumbnail failed for {uri}: {e:#}");
+                }
+            }
+            let mut made_proxies = false;
+            for uri in proxies {
+                match dualcut_engine::thumbs::proxy_mp4(&cache, &uri) {
+                    Ok(_) => made_proxies = true,
+                    Err(e) => {
+                        // Remember the failure so strip rebuilds don't
+                        // retry an expensive doomed transcode forever.
+                        eprintln!("proxy failed for {uri}: {e:#}");
+                        failed_proxies().lock().unwrap().insert(uri);
+                    }
                 }
             }
             for name in tpl_missing {
@@ -841,13 +931,23 @@ impl Editor {
                     eprintln!("waveform failed for {uri}: {e:#}");
                 }
             }
-            let _ = tx.send(());
+            let _ = tx.send(made_proxies);
         });
         glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
             match rx.try_recv() {
-                Ok(()) => {
-                    this.rebuild_strip();
-                    this.rebuild_media();
+                Ok(made_proxies) => {
+                    if made_proxies {
+                        // Recompile so the preview pipeline picks up the
+                        // freshly generated proxies (compile_project swaps
+                        // sources); rebuild_in_memory refreshes the rest.
+                        let project = this.state.borrow().project.clone();
+                        if let Some(project) = project {
+                            this.rebuild_in_memory(project);
+                        }
+                    } else {
+                        this.rebuild_strip();
+                        this.rebuild_media();
+                    }
                     glib::ControlFlow::Break
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
@@ -2042,6 +2142,13 @@ fn snap_time(project: &Project, raw: f64) -> f64 {
         .max(0.0)
 }
 
+/// Proxy transcodes that failed this session — skipped on later rebuilds.
+fn failed_proxies() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static FAILED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    FAILED.get_or_init(Default::default)
+}
+
 fn media_uri(src: &str, base_dir: &std::path::Path) -> Option<String> {
     if src.contains("://") {
         return Some(src.to_string());
@@ -2060,12 +2167,7 @@ fn prefs_show_script() -> bool {
 }
 
 fn prefs_set_show_script(value: bool) {
-    let file = prefs_file();
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let scale = preview_scale();
-    let _ = std::fs::write(&file, format!("show_script={value}\npreview_scale={scale}\n"));
+    prefs_set("show_script", &value.to_string());
 }
 
 fn recents_file() -> PathBuf {
@@ -3112,6 +3214,26 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                     });
                 }
                 group.add(&quality);
+                let proxies = adw::SwitchRow::builder()
+                    .title("Use proxy media")
+                    .subtitle(
+                        "Preview with lightweight 960p transcodes for smooth \
+                         scrubbing; exports always use the originals",
+                    )
+                    .build();
+                proxies.set_active(prefs_use_proxies());
+                {
+                    let editor = editor.clone();
+                    proxies.connect_active_notify(move |r| {
+                        prefs_set_use_proxies(r.is_active());
+                        // Recompile the preview pipeline with/without proxies.
+                        let project = editor.state.borrow().project.clone();
+                        if let Some(project) = project {
+                            editor.rebuild_in_memory(project);
+                        }
+                    });
+                }
+                group.add(&proxies);
                 page.add(&group);
                 dialog.add(&page);
                 dialog.present(editor.window().as_ref());

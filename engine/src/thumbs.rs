@@ -56,6 +56,81 @@ pub fn thumbnail_png(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
     Ok(file)
 }
 
+/// Width of preview proxy media; height follows the source aspect.
+const PROXY_W: i32 = 960;
+
+/// Path a proxy for `uri` would live at (whether or not it exists yet).
+pub fn proxy_path(cache_dir: &Path, uri: &str) -> PathBuf {
+    cache_dir.join(format!("proxy-{:016x}.mkv", fxhash(uri)))
+}
+
+/// Transcode a media URI to a scrubbing-friendly preview proxy (960px-wide
+/// MJPEG + Vorbis in Matroska — all-intra, so seeking is instant and it
+/// decodes everywhere). Cached by URI hash; returns the existing file if
+/// present. Synchronous and slow — call from a worker thread. Preview-only:
+/// exports always read the original media.
+pub fn proxy_mp4(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
+    use gstreamer_pbutils as gst_pbutils;
+    use gst_pbutils::prelude::*;
+
+    let file = proxy_path(cache_dir, uri);
+    if file.exists() {
+        return Ok(file);
+    }
+    std::fs::create_dir_all(cache_dir)?;
+
+    // A matroskamux pad that never sees data stalls the mux forever, so
+    // probe the source for audio up front instead of retry-on-hang.
+    let discoverer = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(15))?;
+    let info = discoverer
+        .discover_uri(uri)
+        .with_context(|| format!("probing {uri} for proxy"))?;
+    if info.video_streams().is_empty() {
+        anyhow::bail!("no video stream in {uri}; not building a proxy");
+    }
+    let has_audio = !info.audio_streams().is_empty();
+
+    // Write to a partial file and rename on success so a killed transcode
+    // never leaves a half-written proxy that later hits the cache check.
+    let part = cache_dir.join(format!("proxy-{:016x}.mkv.part", fxhash(uri)));
+    let _ = std::fs::remove_file(&part);
+    let video = format!(
+        "uridecodebin uri={uri} name=d \
+         d. ! queue ! videoconvert ! videoscale ! \
+         video/x-raw,width={PROXY_W},pixel-aspect-ratio=1/1 ! \
+         jpegenc quality=70 ! queue ! matroskamux name=m ! \
+         filesink location=\"{}\"",
+        part.display()
+    );
+    let audio = " d. ! queue ! audioconvert ! audioresample ! vorbisenc ! queue ! m.";
+    let desc = if has_audio { format!("{video}{audio}") } else { video };
+
+    let pipeline = gst::parse::launch(&desc)?
+        .downcast::<gst::Pipeline>()
+        .map_err(|_| anyhow::anyhow!("not a pipeline"))?;
+    pipeline.set_state(gst::State::Playing)?;
+    let bus = pipeline.bus().context("pipeline has no bus")?;
+    let mut result = Ok(());
+    for msg in bus.iter_timed(gst::ClockTime::NONE) {
+        use gst::MessageView;
+        match msg.view() {
+            MessageView::Eos(_) => break,
+            MessageView::Error(e) => {
+                result = Err(anyhow::anyhow!("proxy transcode failed: {}", e.error()));
+                break;
+            }
+            _ => {}
+        }
+    }
+    let _ = pipeline.set_state(gst::State::Null);
+    if let Err(e) = result {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    std::fs::rename(&part, &file)?;
+    Ok(file)
+}
+
 fn fxhash(s: &str) -> u64 {
     // Tiny stable hash; only used for cache filenames.
     let mut h: u64 = 0xcbf29ce484222325;
