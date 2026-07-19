@@ -233,6 +233,7 @@ pub fn template_png(
         },
         library: Vec::new(),
         defs: project.defs.clone(),
+        scene_lanes: Vec::new(),
         scenes: vec![Scene {
             id: "tpl".into(),
             name: String::new(),

@@ -24,6 +24,25 @@ pub struct Project {
     /// absolute timing; they freely cross scene cuts.
     #[serde(default)]
     pub overlays: Vec<OverlayTrack>,
+    /// Per-layer-index lock/hide/mute for scene layers (#21). Scene
+    /// layers are positional (a vec index, not an identity), so this is
+    /// indexed the same way: `scene_lanes[i]` applies to layer `i` of
+    /// every scene. Missing/short entries default to unlocked/visible.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub scene_lanes: Vec<LaneMeta>,
+}
+
+/// Lock/hide/mute state for one timeline lane (#21). Hide/mute are
+/// applied non-destructively at compile time (opacity/volume to 0);
+/// lock only affects the GUI (drag is disabled).
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct LaneMeta {
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub muted: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -91,6 +110,9 @@ pub struct OverlayTrack {
     /// Hide the track's video without touching its clips (#31).
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub hidden: bool,
+    /// Disable dragging clips on this track in the GUI (#21).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub locked: bool,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
@@ -606,6 +628,22 @@ pub fn remove_clip(project: &mut Project, id: &str) {
     }
 }
 
+/// Grow a scene's duration so a scene-layer clip (by id) fits, if it
+/// doesn't already (#21: "make scene duration flexible" — dragging or
+/// trimming a clip past the current scene end expands the scene rather
+/// than clamping the clip). No-op for overlay clips (already
+/// unbounded) or if the clip already fits.
+pub fn grow_scene_for_clip(project: &mut Project, id: &str) {
+    for scene in &mut project.scenes {
+        let Some(clip) = scene.layers.iter().find(|c| c.id == id) else { continue };
+        let needed = clip.start + if clip.duration > 0.0 { clip.duration } else { 0.1 };
+        if needed > scene.duration {
+            scene.duration = needed;
+        }
+        return;
+    }
+}
+
 /// Ripple delete (#34): remove the clip and close the gap it leaves.
 /// Overlay clips shift everything after them in the track left; scene
 /// clips shrink the scene toward the remaining content.
@@ -833,6 +871,7 @@ pub fn detach_audio(project: &mut Project, id: &str) -> Option<String> {
         project.overlays.push(OverlayTrack {
             muted: false,
             hidden: false,
+            locked: false,
             id: "detached-audio".into(),
             name: "Detached audio".into(),
             clips: vec![audio],
@@ -1119,6 +1158,24 @@ mod tests {
         assert!(split_clip(&mut p, "nope", 1.0).is_err());
         // At the very start of the clip: rejected.
         assert!(split_clip(&mut p, "media-ball", 3.0).is_err());
+    }
+
+    #[test]
+    fn grow_scene_for_clip_expands_but_never_shrinks() {
+        let mut p = demo();
+        // media-ball: scene-media (duration 4.0), start 0, duration 4.
+        if let Some(c) = find_clip_mut(&mut p, "media-ball") {
+            c.start = 6.0;
+            c.duration = 5.0;
+        }
+        grow_scene_for_clip(&mut p, "media-ball");
+        assert!((p.scenes[1].duration - 11.0).abs() < 1e-6);
+        // Shrinking the clip back doesn't shrink the scene.
+        if let Some(c) = find_clip_mut(&mut p, "media-ball") {
+            c.duration = 1.0;
+        }
+        grow_scene_for_clip(&mut p, "media-ball");
+        assert!((p.scenes[1].duration - 11.0).abs() < 1e-6);
     }
 
     #[test]

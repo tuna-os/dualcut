@@ -30,6 +30,18 @@ use std::rc::Rc;
 use std::time::SystemTime;
 
 const DEFAULT_PPS: f64 = 42.0;
+/// Fixed width of a timeline lane's icon+label+toggles column. Shared by
+/// every lane row and the ruler's leading spacer so the ruler's time
+/// axis lines up with the clip lanes below it (#21).
+const LANE_COL_PX: i32 = 190;
+
+/// Which per-lane control was toggled (#21).
+#[derive(Clone, Copy)]
+enum LaneToggle {
+    Lock,
+    Hide,
+    Mute,
+}
 
 fn main() -> glib::ExitCode {
     let app = adw::Application::builder()
@@ -514,6 +526,49 @@ impl Editor {
         }
     }
 
+    /// Icon + label + Lock/Hide/Mute toggle column for one timeline lane
+    /// row (#21), fixed to [`LANE_COL_PX`] so every row (and the ruler's
+    /// spacer) lines up on the same x-axis. `on_toggle` commits whatever
+    /// document mutation the caller's lane identity needs.
+    fn build_lane_column(
+        self: &Rc<Self>,
+        icon: &str,
+        label: &str,
+        locked: bool,
+        hidden: bool,
+        muted: bool,
+        on_toggle: Rc<dyn Fn(LaneToggle, bool)>,
+    ) -> gtk::Box {
+        let col = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+        col.set_size_request(LANE_COL_PX, -1);
+        col.set_margin_start(4);
+        let icon_w = gtk::Image::from_icon_name(icon);
+        icon_w.set_pixel_size(14);
+        col.append(&icon_w);
+        let lbl = gtk::Label::new(Some(label));
+        lbl.add_css_class("dim-label");
+        lbl.set_ellipsize(gtk::pango::EllipsizeMode::End);
+        lbl.set_hexpand(true);
+        lbl.set_halign(gtk::Align::Start);
+        col.append(&lbl);
+        for (kind, icon_on, icon_off, active, tip) in [
+            (LaneToggle::Lock, "changes-prevent-symbolic", "changes-allow-symbolic", locked, "Lock lane"),
+            (LaneToggle::Hide, "view-reveal-symbolic", "view-conceal-symbolic", hidden, "Hide lane"),
+            (LaneToggle::Mute, "audio-volume-high-symbolic", "audio-volume-muted-symbolic", muted, "Mute lane"),
+        ] {
+            let b = gtk::ToggleButton::new();
+            b.set_icon_name(if active { icon_off } else { icon_on });
+            b.set_active(active);
+            b.add_css_class("flat");
+            b.set_tooltip_text(Some(tip));
+            b.update_property(&[gtk::accessible::Property::Label(tip)]);
+            let on_toggle = on_toggle.clone();
+            b.connect_toggled(move |btn| on_toggle(kind, btn.is_active()));
+            col.append(&b);
+        }
+        col
+    }
+
     fn rebuild_strip(self: &Rc<Self>) {
         let ui = self.ui.borrow();
         let Some(ui) = ui.as_ref() else { return };
@@ -586,21 +641,53 @@ impl Editor {
             });
             ruler.add_controller(click);
         }
-        ui.strip.append(&ruler);
+        // Spacer matching the lane label column exactly, so the ruler's
+        // time axis (and its playhead line) lines up with the clip
+        // lanes below instead of two different x-origins (#21).
+        let ruler_row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        let ruler_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+        ruler_spacer.set_size_request(LANE_COL_PX, -1);
+        ruler_row.append(&ruler_spacer);
+        ruler_row.append(&ruler);
+        ui.strip.append(&ruler_row);
         *ui.ruler.borrow_mut() = Some(ruler.clone());
-
-        // (Scene blocks replaced by the ruler above.)
 
         // Scene-layer lanes: one row per layer slot, clips positioned at
         // absolute time (scene offset + clip start). Dragging retimes the
-        // clip within its scene; right-edge drag trims duration.
-        let max_layers = project.scenes.iter().map(|s| s.layers.len()).max().unwrap_or(0);
+        // clip within its scene; right-edge drag trims duration. Always
+        // show at least one lane so a fresh project has somewhere to
+        // drop the first clip (#21).
+        let max_layers =
+            project.scenes.iter().map(|s| s.layers.len()).max().unwrap_or(0).max(1);
         for li in 0..max_layers {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
-            let tag = gtk::Label::new(Some(&format!("layer {li}")));
-            tag.add_css_class("dim-label");
-            tag.set_width_chars(14);
-            row.append(&tag);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+            let meta = project.scene_lanes.get(li).cloned().unwrap_or_default();
+            let on_toggle: Rc<dyn Fn(LaneToggle, bool)> = {
+                let this = self.clone();
+                let project_snapshot = project.clone();
+                Rc::new(move |kind: LaneToggle, active: bool| {
+                    let mut project = project_snapshot.clone();
+                    if project.scene_lanes.len() <= li {
+                        project.scene_lanes.resize(li + 1, document::LaneMeta::default());
+                    }
+                    let lane = &mut project.scene_lanes[li];
+                    match kind {
+                        LaneToggle::Lock => lane.locked = active,
+                        LaneToggle::Hide => lane.hidden = active,
+                        LaneToggle::Mute => lane.muted = active,
+                    }
+                    this.commit_document(project);
+                })
+            };
+            let col = self.build_lane_column(
+                "video-x-generic-symbolic",
+                &format!("Layer {}", li + 1),
+                meta.locked,
+                meta.hidden,
+                meta.muted,
+                on_toggle,
+            );
+            row.append(&col);
             let lane = gtk::Fixed::new();
             lane.set_size_request((project.duration() * pps) as i32 + 40, 30);
             for (si, scene) in project.scenes.iter().enumerate() {
@@ -612,15 +699,18 @@ impl Editor {
                     (scene.duration - clip.start).max(0.1)
                 };
                 let scene_off = offset;
-                let scene_dur = scene.duration;
                 self.add_lane_clip(
                     &lane,
                     clip,
                     offset + clip.start,
                     duration,
-                    Rc::new(move |raw_abs: f64| (raw_abs - scene_off).clamp(0.0, scene_dur - 0.1)),
+                    // Flexible scene duration (#21): don't clamp to the
+                    // current scene length -- dragging/trimming past it
+                    // grows the scene instead (see grow_scene_for_clip).
+                    Rc::new(move |raw_abs: f64| (raw_abs - scene_off).max(0.0)),
                     true,
                     li,
+                    meta.locked,
                 );
             }
             row.append(&lane);
@@ -628,45 +718,33 @@ impl Editor {
         }
 
         for (ti, track) in project.overlays.iter().enumerate() {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 0);
             let name = if track.name.is_empty() { &track.id } else { &track.name };
-            let tag = gtk::Label::new(Some(&format!("〜 {name}")));
-            tag.add_css_class("dim-label");
-            tag.set_width_chars(8);
-            tag.set_ellipsize(gtk::pango::EllipsizeMode::End);
-            row.append(&tag);
-            // Track visibility / mute toggles (#31).
-            for (icon_on, icon_off, is_mute) in [
-                ("view-reveal-symbolic", "view-conceal-symbolic", false),
-                ("audio-volume-high-symbolic", "audio-volume-muted-symbolic", true),
-            ] {
-                let active = if is_mute { track.muted } else { track.hidden };
-                let b = gtk::ToggleButton::new();
-                b.set_icon_name(if active { icon_off } else { icon_on });
-                b.set_active(active);
-                b.add_css_class("flat");
-                b.set_tooltip_text(Some(if is_mute { "Mute track" } else { "Hide track" }));
-                b.update_property(&[gtk::accessible::Property::Label(if is_mute {
-                    "Mute track"
-                } else {
-                    "Hide track"
-                })]);
+            let on_toggle: Rc<dyn Fn(LaneToggle, bool)> = {
                 let this = self.clone();
                 let track_id = track.id.clone();
                 let project_snapshot = project.clone();
-                b.connect_toggled(move |btn| {
+                Rc::new(move |kind: LaneToggle, active: bool| {
                     let mut project = project_snapshot.clone();
                     if let Some(t) = project.overlays.iter_mut().find(|t| t.id == track_id) {
-                        if is_mute {
-                            t.muted = btn.is_active();
-                        } else {
-                            t.hidden = btn.is_active();
+                        match kind {
+                            LaneToggle::Lock => t.locked = active,
+                            LaneToggle::Hide => t.hidden = active,
+                            LaneToggle::Mute => t.muted = active,
                         }
                         this.commit_document(project);
                     }
-                });
-                row.append(&b);
-            }
+                })
+            };
+            let col = self.build_lane_column(
+                "audio-x-generic-symbolic",
+                name,
+                track.locked,
+                track.hidden,
+                track.muted,
+                on_toggle,
+            );
+            row.append(&col);
             let lane = gtk::Fixed::new();
             lane.set_size_request((project.duration() * pps) as i32 + 40, 30);
             for clip in &track.clips {
@@ -678,6 +756,7 @@ impl Editor {
                     Rc::new(|raw_abs: f64| raw_abs.max(0.0)),
                     false,
                     max_layers + ti,
+                    track.locked,
                 );
             }
             row.append(&lane);
@@ -698,6 +777,7 @@ impl Editor {
         to_start: Rc<dyn Fn(f64) -> f64>,
         scene_relative: bool,
         lane_index: usize,
+        locked: bool,
     ) {
         let (project, pps) = {
             let st = self.state.borrow();
@@ -719,7 +799,11 @@ impl Editor {
         });
         let width_px = ((duration * pps) as i32).max(30);
         button.set_size_request(width_px, 28);
-        button.set_tooltip_text(Some("Drag to move · right edge trims"));
+        button.set_tooltip_text(Some(if locked {
+            "Locked (unlock the lane to edit)"
+        } else {
+            "Drag to move · right edge trims"
+        }));
         if let document::Element::Audio { src, .. } = &clip.element
             && let Some(uri) = media_uri(src, &self.base_dir()) {
                 let wave = cache.join(format!("wave-{:016x}.png", fx_hash(&uri)));
@@ -820,10 +904,20 @@ impl Editor {
                         c.start = new_start;
                     }
                 }
+                // Flexible scene duration (#21): a scene-relative clip
+                // that now runs past the scene's end grows the scene
+                // instead of getting silently clipped.
+                if scene_relative {
+                    document::grow_scene_for_clip(&mut project, &id);
+                }
                 this.commit_document(project);
             });
         }
-        button.add_controller(drag);
+        // A locked lane keeps clips selectable (button.connect_clicked
+        // above) but not draggable (#21).
+        if !locked {
+            button.add_controller(drag);
+        }
     }
 
     /// Generate any missing media thumbnails off-thread, then refresh the
@@ -902,7 +996,14 @@ impl Editor {
                 _ => {}
             }
         }
-        let tpl_missing: Vec<String> = project
+        // Thumbnail the starter catalog too, not just defs the project
+        // already carries (#21: defs only enter the document on insert).
+        // Project's own def wins on a name clash.
+        let mut catalog_project = project.clone();
+        let mut merged_defs = dualcut_engine::templates::starter_defs();
+        merged_defs.extend(catalog_project.defs.clone());
+        catalog_project.defs = merged_defs;
+        let tpl_missing: Vec<String> = catalog_project
             .defs
             .iter()
             .filter(|(_, d)| {
@@ -920,7 +1021,7 @@ impl Editor {
         }
         let cache = cache.to_path_buf();
         let this = self.clone();
-        let project_snapshot = project.clone();
+        let project_snapshot = catalog_project;
         let (tx, rx) = std::sync::mpsc::channel::<bool>();
         std::thread::spawn(move || {
             for uri in thumbs {
@@ -1123,7 +1224,10 @@ impl Editor {
         let offset = project.scene_offset(index);
         let scene = &mut project.scenes[index];
         let start = (time - offset).clamp(0.0, (scene.duration - 0.1).max(0.0));
-        scene.layers.push(document::Clip {
+        // Video dropped from the Library goes above the existing layers
+        // (#21) -- everything else keeps stacking on top as before.
+        let is_video = matches!(element, document::Element::Video { .. });
+        let clip = document::Clip {
             id: id.clone(),
             start,
             duration: 0.0,
@@ -1131,7 +1235,12 @@ impl Editor {
             transform: Default::default(),
             animations: Vec::new(),
             effects: Vec::new(),
-        });
+        };
+        if is_video {
+            scene.layers.insert(0, clip);
+        } else {
+            scene.layers.push(clip);
+        }
         self.state.borrow_mut().selected = Some(id);
         self.commit_document(project);
     }
@@ -1266,26 +1375,31 @@ impl Editor {
         while let Some(child) = ui.templates_list.first_child() {
             ui.templates_list.remove(&child);
         }
-        let defs: Vec<(String, Vec<String>)> = {
+        // Catalog = starter templates ∪ the project's own saved defs
+        // (project entries win on name clash, e.g. a locally-edited
+        // "title-card"). A def only enters the document when actually
+        // inserted (#21) -- the Templates tab itself doesn't require
+        // starter defs to be pre-baked into every project.
+        let catalog: std::collections::BTreeMap<String, document::CompDef> = {
             let st = self.state.borrow();
-            let Some(project) = st.project.as_ref() else { return };
-            project.defs.iter().map(|(n, d)| (n.clone(), d.params.clone())).collect()
+            let mut merged = dualcut_engine::templates::starter_defs();
+            if let Some(project) = st.project.as_ref() {
+                merged.extend(project.defs.clone());
+            }
+            merged
         };
+        let defs: Vec<(String, Vec<String>)> =
+            catalog.iter().map(|(n, d)| (n.clone(), d.params.clone())).collect();
         let cache = self.base_dir().join(".dualcut-cache");
-        let def_hashes: std::collections::BTreeMap<String, String> = {
-            let st = self.state.borrow();
-            st.project.as_ref().map_or_else(Default::default, |p| {
-                p.defs
-                    .iter()
-                    .map(|(n, d)| {
-                        (n.clone(), format!(
-                            "tpl-{:016x}.png",
-                            fx_hash(&serde_json::to_string(d).unwrap_or_default())
-                        ))
-                    })
-                    .collect()
+        let def_hashes: std::collections::BTreeMap<String, String> = catalog
+            .iter()
+            .map(|(n, d)| {
+                (n.clone(), format!(
+                    "tpl-{:016x}.png",
+                    fx_hash(&serde_json::to_string(d).unwrap_or_default())
+                ))
             })
-        };
+            .collect();
         for (name, params) in defs {
             let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
             if let Some(key) = def_hashes.get(&name) {
@@ -1354,6 +1468,13 @@ impl Editor {
             (st.project.clone(), time)
         };
         let Some(mut project) = project else { return };
+        // Copy the def in from the starter catalog on first use (#21):
+        // the project only carries the defs it actually uses.
+        if !project.defs.contains_key(name)
+            && let Some(def) = dualcut_engine::templates::starter_defs().remove(name)
+        {
+            project.defs.insert(name.to_string(), def);
+        }
         let mut id = name.to_string();
         let mut n = 1;
         while find_clip(&project, &id).is_some() {
@@ -2581,6 +2702,7 @@ fn apply_captions(editor: &Rc<Editor>, segments: &[(f64, f64, String)]) {
             id: "subtitles".to_string(),
             muted: false,
             hidden: false,
+            locked: false,
             name: "Subtitles".to_string(),
             clips,
         }),

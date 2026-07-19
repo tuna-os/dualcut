@@ -37,10 +37,15 @@ pub fn compile_scaled(
     scale: f64,
 ) -> Result<Compiled> {
     project.validate()?;
-    // Track mute/hide (#31): applied non-destructively at compile time
-    // by zeroing volume/opacity on the affected clips.
+    // Track/lane mute/hide (#31, #21): applied non-destructively at
+    // compile time by zeroing volume/opacity on the affected clips.
+    // scene_lanes[i] applies to layer index i of every scene (scene
+    // layers are positional, not identities, so there's no per-scene
+    // lane state to track separately).
+    let needs_adjust = project.overlays.iter().any(|t| t.muted || t.hidden)
+        || project.scene_lanes.iter().any(|l| l.muted || l.hidden);
     let adjusted;
-    let project = if project.overlays.iter().any(|t| t.muted || t.hidden) {
+    let project = if needs_adjust {
         let mut p = project.clone();
         for track in &mut p.overlays {
             for clip in &mut track.clips {
@@ -48,6 +53,20 @@ pub fn compile_scaled(
                     clip.transform.opacity = 0.0;
                 }
                 if track.muted
+                    && let Element::Video { volume, .. } | Element::Audio { volume, .. } =
+                        &mut clip.element
+                {
+                    *volume = 0.0;
+                }
+            }
+        }
+        for scene in &mut p.scenes {
+            for (i, clip) in scene.layers.iter_mut().enumerate() {
+                let Some(lane) = p.scene_lanes.get(i) else { continue };
+                if lane.hidden {
+                    clip.transform.opacity = 0.0;
+                }
+                if lane.muted
                     && let Element::Video { volume, .. } | Element::Audio { volume, .. } =
                         &mut clip.element
                 {

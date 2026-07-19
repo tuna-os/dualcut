@@ -10,30 +10,26 @@ pub fn starter_defs() -> BTreeMap<String, CompDef> {
 }
 
 /// Scaffold a new project: 1080p30, one title-card scene, starter defs.
+/// A genuinely blank project: resolution + fps and nothing else (#21 QA
+/// feedback — starter defs used to be baked into every new project's
+/// `defs`, so they lingered in the Code tab even after the clip that
+/// used them was deleted). Starter templates are still one click away
+/// in the Templates tab (`starter_defs()`); a def only enters the
+/// document when the user actually inserts it.
 pub fn new_project(title: &str) -> Project {
-    let mut args = BTreeMap::new();
-    args.insert("title".to_string(), title.to_string());
-    args.insert("subtitle".to_string(), "Made with dualcut".to_string());
     Project {
         meta: Meta { title: title.into(), width: 1920, height: 1080, fps: 30 },
         library: Vec::new(),
-        defs: starter_defs(),
+        defs: BTreeMap::new(),
         scenes: vec![Scene {
             id: "scene-1".into(),
-            name: "Title".into(),
-            duration: 4.0,
+            name: String::new(),
+            duration: 5.0,
             transition: None,
-            layers: vec![crate::document::Clip {
-                id: "opening-card".into(),
-                start: 0.0,
-                duration: 0.0,
-                element: crate::document::Element::CompRef { r#ref: "title-card".into(), args },
-                transform: Default::default(),
-                animations: Vec::new(),
-                effects: Vec::new(),
-            }],
+            layers: Vec::new(),
         }],
         overlays: Vec::new(),
+        scene_lanes: Vec::new(),
     }
 }
 
@@ -49,6 +45,9 @@ mod tests {
         assert!(defs.contains_key("caption"));
         let p = new_project("Test");
         assert!(p.validate().is_ok());
-        assert_eq!(p.duration(), 4.0);
+        assert_eq!(p.duration(), 5.0);
+        // Blank on purpose: no defs, no clips (#21).
+        assert!(p.defs.is_empty());
+        assert!(p.scenes[0].layers.is_empty());
     }
 }
