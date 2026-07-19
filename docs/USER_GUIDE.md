@@ -16,11 +16,11 @@ ones), or pass a path on the command line: `dualcut project.json`.
 
 ## The editor
 
-One window, four regions: the **Library / Templates / Code / Script**
-tabs on the left, the **preview** with transport controls in the
-middle, the **Inspector** (parameters for whatever is selected) on the
-right, and the **timeline** in a bottom pane you can toggle from the
-header bar.
+One window, four regions: the **Clips / Library / Templates / Code /
+Script** tabs on the left, the **preview** with transport controls in
+the middle, the **Inspector** (parameters for whatever is selected) on
+the right, and the **timeline** in a bottom pane you can toggle from
+the header bar.
 
 ![Editor overview](guide/editor-overview.png)
 
@@ -65,8 +65,8 @@ scenes, retiming clips, generating layers from data.
 ## Editing clips
 
 Select a clip in the timeline, preview, or Inspect list to edit its
-timing, transform, and text; add animation presets (fades, slides,
-audio fades) or hand-tune animations per property; stack **effects**
+timing, transform, and text; add transition presets (fades, slides,
+audio fades) or hand-tune keyframes per property; stack **effects**
 (blur, color) with live parameter spinners.
 
 ![Clip inspector](guide/clip-inspector.png)

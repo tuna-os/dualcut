@@ -113,6 +113,7 @@ struct Ui {
     inspector: gtk::Box,
     media_grid: gtk::FlowBox,
     media_empty: gtk::Box,
+    clips_box: gtk::Box,
     toasts: adw::ToastOverlay,
     ruler: std::cell::RefCell<Option<gtk::DrawingArea>>,
     templates_list: gtk::ListBox,
@@ -1154,6 +1155,9 @@ impl Editor {
         while let Some(child) = uiref.inspector.first_child() {
             uiref.inspector.remove(&child);
         }
+        while let Some(child) = uiref.clips_box.first_child() {
+            uiref.clips_box.remove(&child);
+        }
         let Some(project) = project else {
             let hint = gtk::Label::new(Some("No project loaded.\nOpen with: dualcut project.json"));
             hint.add_css_class("dim-label");
@@ -1216,7 +1220,7 @@ impl Editor {
         scroll.set_child(Some(&list));
         scroll.set_vexpand(true);
         scroll.set_min_content_height(160);
-        uiref.inspector.append(&scroll);
+        uiref.clips_box.append(&scroll);
 
         // Multi-select ops (Ctrl/Shift-click rows first).
         let sel_ops = gtk::Box::new(gtk::Orientation::Horizontal, 6);
@@ -1275,10 +1279,19 @@ impl Editor {
         }
         sel_ops.append(&tpl_name);
         sel_ops.append(&save_tpl);
-        uiref.inspector.append(&sel_ops);
+        uiref.clips_box.append(&sel_ops);
 
         // Editor form for the selected clip (or scene).
-        let Some(selected) = selected else { return };
+        let Some(selected) = selected else {
+            let hint = gtk::Label::new(Some(
+                "Select a clip (timeline, preview, or Clips tab)\nor a scene (ruler) to edit its parameters.",
+            ));
+            hint.add_css_class("dim-label");
+            hint.set_wrap(true);
+            hint.set_margin_top(24);
+            uiref.inspector.append(&hint);
+            return;
+        };
         if let Some(scene_id) = selected.strip_prefix("scene:") {
             self.build_scene_form(uiref, &project, scene_id);
             return;
@@ -1353,11 +1366,13 @@ impl Editor {
         form.append(&apply);
 
         // ── Animations ─────────────────────────────────────────
-        let anim_head = gtk::Label::new(Some("Animations"));
-        anim_head.add_css_class("heading");
-        anim_head.set_halign(gtk::Align::Start);
-        anim_head.set_margin_top(8);
-        form.append(&anim_head);
+        if !clip.animations.is_empty() {
+            let anim_head = gtk::Label::new(Some("Keyframes"));
+            anim_head.add_css_class("heading");
+            anim_head.set_halign(gtk::Align::Start);
+            anim_head.set_margin_top(8);
+            form.append(&anim_head);
+        }
 
         const PROPS: [&str; 6] = ["x", "y", "width", "height", "opacity", "volume"];
         const EASINGS: [&str; 4] = ["linear", "easeIn", "easeOut", "easeInOut"];
@@ -1463,7 +1478,16 @@ impl Editor {
         }
 
         // Presets.
-        let presets = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        let tr_head = gtk::Label::new(Some("Transitions"));
+        tr_head.add_css_class("heading");
+        tr_head.set_halign(gtk::Align::Start);
+        tr_head.set_margin_top(8);
+        form.append(&tr_head);
+        let presets = gtk::FlowBox::new();
+        presets.set_selection_mode(gtk::SelectionMode::None);
+        presets.set_max_children_per_line(3);
+        presets.set_column_spacing(6);
+        presets.set_row_spacing(6);
         let add_preset = |label: &str, make: fn(&document::Clip) -> document::Anim| {
             let b = gtk::Button::with_label(label);
             let this = self.clone();
@@ -1477,7 +1501,7 @@ impl Editor {
                 }
                 this.commit_document(project);
             });
-            presets.append(&b);
+            presets.insert(&b, -1);
         };
         add_preset("+ Fade in", |_| document::Anim {
             property: document::AnimProperty::Opacity,
@@ -2582,7 +2606,12 @@ add files to import first"));
     templates_scroll.set_child(Some(&templates_list));
     templates_scroll.set_vexpand(true);
 
+    let clips_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    clips_box.set_margin_top(6);
+    clips_box.set_margin_start(6);
+    clips_box.set_margin_end(6);
     let left_tabs = gtk::Notebook::new();
+    left_tabs.append_page(&clips_box, Some(&gtk::Label::new(Some("Clips"))));
     left_tabs.append_page(&media_scroll, Some(&gtk::Label::new(Some("Library"))));
     left_tabs.append_page(&templates_scroll, Some(&gtk::Label::new(Some("Templates"))));
     left_tabs.append_page(&code_page, Some(&gtk::Label::new(Some("Code"))));
@@ -2946,6 +2975,7 @@ add files to import first"));
             inspector,
             media_grid,
             media_empty,
+            clips_box,
             toasts: toasts.clone(),
             ruler: std::cell::RefCell::new(None),
             templates_list,
