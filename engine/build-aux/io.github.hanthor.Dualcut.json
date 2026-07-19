@@ -62,29 +62,13 @@
       ]
     },
     {
-      "name": "lame",
-      "buildsystem": "autotools",
-      "config-opts": [
-        "--disable-frontend",
-        "--enable-shared"
-      ],
-      "sources": [
-        {
-          "type": "archive",
-          "url": "https://downloads.sourceforge.net/lame/lame-3.100.tar.gz",
-          "sha256": "ddfe36cab873794038ae2c1210557ad34857a4b6bdc515785d1da9e175b1da1e"
-        }
-      ]
-    },
-    {
       "name": "gst-plugins-ugly",
       "buildsystem": "meson",
       "config-opts": [
         "-Ddoc=disabled",
         "-Dgpl=enabled",
         "-Dauto_features=disabled",
-        "-Dx264=enabled",
-        "-Dlame=enabled"
+        "-Dx264=enabled"
       ],
       "sources": [
         {
