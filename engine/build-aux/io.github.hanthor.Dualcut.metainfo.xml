@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.15.1" date="2026-07-19">
+      <description>
+        <p>MP4 export in the flatpak: bundled x264 encoder (WebM-only workaround no longer needed).</p>
+      </description>
+    </release>
     <release version="0.15.0" date="2026-07-19">
       <description>
         <p>Inspector restructure: Clips tab, parameters-only right pane, Transitions/Keyframes sections, wrapped presets.</p>
