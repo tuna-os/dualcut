@@ -214,11 +214,11 @@ pub fn mp4_profile() -> gst_pbutils::EncodingContainerProfile {
         &gst::Caps::builder("video/x-h264").field("profile", "high").build(),
     )
     .build();
+    // No base-profile restriction: avenc_aac (the encoder present in the
+    // flatpak) does not advertise it, and encodebin refuses caps its
+    // encoder cannot intersect (#26).
     let audio = gst_pbutils::EncodingAudioProfile::builder(
-        &gst::Caps::builder("audio/mpeg")
-            .field("mpegversion", 4i32)
-            .field("base-profile", "lc")
-            .build(),
+        &gst::Caps::builder("audio/mpeg").field("mpegversion", 4i32).build(),
     )
     .build();
     gst_pbutils::EncodingContainerProfile::builder(

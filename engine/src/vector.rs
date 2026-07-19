@@ -27,7 +27,13 @@ static GPU: OnceLock<Option<Gpu>> = OnceLock::new();
 
 fn gpu() -> Option<&'static Gpu> {
     GPU.get_or_init(|| {
-        let instance = wgpu::Instance::new(wgpu::InstanceDescriptor::new_without_display_handle());
+        // Vulkan only: wgpu's GL backend lacks the compute features
+        // Vello's shaders need (ARB_arrays_of_arrays panics observed in
+        // the wild, #26); no Vulkan means no vector rendering rather
+        // than a crashed app.
+        let mut desc = wgpu::InstanceDescriptor::new_without_display_handle();
+        desc.backends = wgpu::Backends::VULKAN;
+        let instance = wgpu::Instance::new(desc);
         let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
             power_preference: wgpu::PowerPreference::HighPerformance,
             force_fallback_adapter: false,
@@ -36,7 +42,13 @@ fn gpu() -> Option<&'static Gpu> {
         .ok()?;
         let (device, queue) =
             pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor::default())).ok()?;
-        let renderer = Renderer::new(&device, RendererOptions::default()).ok()?;
+        // Shader compilation panics on unsupported drivers; degrade to
+        // "no vector rendering" instead of unwinding through GStreamer.
+        let renderer = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            Renderer::new(&device, RendererOptions::default())
+        }))
+        .ok()?
+        .ok()?;
         Some(Gpu { device, queue, renderer: std::sync::Mutex::new(renderer) })
     })
     .as_ref()
