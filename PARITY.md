@@ -94,16 +94,13 @@ Legend: ✅ solid · 🟡 partial/basic · ❌ absent · — not applicable
 
 ## Remaining gaps
 
-1. **Speed ramping** — constant rate shipped; keyframed curves are a
-   follow-up.
+1. **Keyframed speed ramps** — constant rate ships; ramping needs
+   clip segmentation (#40), not live GES property binding (unsafe,
+   root-caused).
 2. **Auto-captions bundling** — *Generate Captions…* in the menu and
    the agent recipe both drive a local whisper.cpp install (#37); the
    remaining gap is bundling STT so it works out of the box.
-6. **Keyframed speed ramps** — constant rate ships; ramping needs
-   clip segmentation (#40), not live GES property binding (unsafe,
-   root-caused).
 3. **Bezier masks** — chroma key + rectangular crop ship; freeform
    masks need a compositor story.
-4. **Denoise** — EQ + compressor ship; needs a flatpak-viable plugin.
-5. **Full color grading** — basic balance only; curves/wheels are a
+4. **Full color grading** — basic balance only; curves/wheels are a
    bigger project.
