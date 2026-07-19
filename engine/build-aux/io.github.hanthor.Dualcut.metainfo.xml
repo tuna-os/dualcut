@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.25.0" date="2026-07-19">
+      <description>
+        <p>Fix filenames-with-spaces crash in proxy generation and MP4/H.264/H.265/AV1 export failures (AAC encoder was excluded from autoplugging).</p>
+      </description>
+    </release>
     <release version="0.24.0" date="2026-07-19">
       <description>
         <p>Auto-captions works out of the box: bundled CPU-only whisper.cpp + a tiny English model in the flatpak, no external install needed.</p>
