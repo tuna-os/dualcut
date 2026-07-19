@@ -77,6 +77,19 @@ fn main() -> Result<()> {
         return Ok(());
     }
 
+    // `render tpl <project.json> <def>` renders a template preview PNG.
+    #[cfg(feature = "preview")]
+    if first == "tpl" {
+        let path = args.next().context("usage: render tpl <project.json> <def>")?;
+        let name = args.next().context("usage: render tpl <project.json> <def>")?;
+        let json = std::fs::read_to_string(&path)?;
+        let project = Project::from_json(&json)?;
+        let base = std::path::Path::new(&path).parent().unwrap_or(std::path::Path::new(".")).to_path_buf();
+        let out = dualcut_engine::thumbs::template_png(&base.join(".dualcut-cache"), &project, &name, &base)?;
+        println!("template preview -> {}", out.display());
+        return Ok(());
+    }
+
     let (timeline, out) = if first.ends_with(".json") {
         let out = args.next().unwrap_or_else(|| "out.mp4".into());
         let json = std::fs::read_to_string(&first).with_context(|| format!("reading {first}"))?;

@@ -265,8 +265,11 @@ impl Editor {
             }
             let offset = project.scene_offset(i);
             let this = self.clone();
+            let scene_id = scene.id.clone();
             button.connect_clicked(move |_| {
                 seek_to(&this.state.borrow().pipeline, offset);
+                this.state.borrow_mut().selected = Some(format!("scene:{scene_id}"));
+                this.rebuild_inspector();
             });
 
             // Scene cell: block + reorder arrows.
@@ -518,16 +521,39 @@ impl Editor {
                 _ => {}
             }
         }
-        if thumbs.is_empty() && waves.is_empty() {
+        let tpl_missing: Vec<String> = project
+            .defs
+            .iter()
+            .filter(|(_, d)| {
+                let key = format!(
+                    "tpl-{:016x}.png",
+                    fx_hash(&serde_json::to_string(d).unwrap_or_default())
+                );
+                !cache.join(key).exists()
+            })
+            .map(|(n, _)| n.clone())
+            .collect();
+        if thumbs.is_empty() && waves.is_empty() && tpl_missing.is_empty() {
             return;
         }
         let cache = cache.to_path_buf();
         let this = self.clone();
+        let project_snapshot = project.clone();
         let (tx, rx) = std::sync::mpsc::channel::<()>();
         std::thread::spawn(move || {
             for uri in thumbs {
                 if let Err(e) = dualcut_engine::thumbs::thumbnail_png(&cache, &uri) {
                     eprintln!("thumbnail failed for {uri}: {e:#}");
+                }
+            }
+            for name in tpl_missing {
+                if let Err(e) = dualcut_engine::thumbs::template_png(
+                    &cache,
+                    &project_snapshot,
+                    &name,
+                    &base_dir,
+                ) {
+                    eprintln!("template thumb failed for {name}: {e:#}");
                 }
             }
             for uri in waves {
@@ -649,6 +675,110 @@ impl Editor {
         self.commit_document(project);
     }
 
+    /// Scene form: duration and transition editing.
+    fn build_scene_form(self: &Rc<Self>, uiref: &Ui, project: &Project, scene_id: &str) {
+        let Some(scene) = project.scenes.iter().find(|s| s.id == scene_id) else { return };
+        let form = gtk::Box::new(gtk::Orientation::Vertical, 6);
+        form.set_margin_top(8);
+        let title = gtk::Label::new(Some(&format!("Scene: {scene_id}")));
+        title.add_css_class("heading");
+        title.set_halign(gtk::Align::Start);
+        form.append(&title);
+
+        let dur_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let dl = gtk::Label::new(Some("Duration"));
+        dl.set_width_chars(9);
+        dl.set_halign(gtk::Align::Start);
+        let dur = gtk::SpinButton::with_range(0.1, 3600.0, 0.1);
+        dur.set_value(scene.duration);
+        dur.set_hexpand(true);
+        dur_row.append(&dl);
+        dur_row.append(&dur);
+        form.append(&dur_row);
+        {
+            let this = self.clone();
+            let project = project.clone();
+            let scene_id = scene_id.to_string();
+            dur.connect_value_changed(move |s| {
+                let mut project = project.clone();
+                if let Some(sc) = project.scenes.iter_mut().find(|x| x.id == scene_id) {
+                    sc.duration = s.value();
+                }
+                this.commit_document(project);
+            });
+        }
+
+        const KINDS: [&str; 7] =
+            ["(none)", "crossfade", "wipe-lr", "wipe-tb", "box-wipe", "iris", "clock"];
+        let kind_index = |tr: &Option<document::Transition>| -> u32 {
+            match tr {
+                None => 0,
+                Some(t) => match t.kind {
+                    document::TransitionKind::Crossfade => 1,
+                    document::TransitionKind::WipeLr => 2,
+                    document::TransitionKind::WipeTb => 3,
+                    document::TransitionKind::BoxWipe => 4,
+                    document::TransitionKind::Iris => 5,
+                    document::TransitionKind::Clock => 6,
+                },
+            }
+        };
+        let tr_row = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+        let tl = gtk::Label::new(Some("Transition"));
+        tl.set_width_chars(9);
+        tl.set_halign(gtk::Align::Start);
+        let dd = gtk::DropDown::from_strings(&KINDS);
+        dd.set_selected(kind_index(&scene.transition));
+        dd.set_hexpand(true);
+        let tdur = gtk::SpinButton::with_range(0.1, 10.0, 0.1);
+        tdur.set_value(scene.transition.as_ref().map_or(0.5, |t| t.duration));
+        tr_row.append(&tl);
+        tr_row.append(&dd);
+        tr_row.append(&tdur);
+        form.append(&tr_row);
+        let is_first = project.scenes.first().map(|s| s.id == scene.id).unwrap_or(false);
+        if is_first {
+            let hint = gtk::Label::new(Some("(first scene has no incoming transition)"));
+            hint.add_css_class("dim-label");
+            hint.set_halign(gtk::Align::Start);
+            form.append(&hint);
+            dd.set_sensitive(false);
+            tdur.set_sensitive(false);
+        } else {
+            let apply = {
+                let this = self.clone();
+                let project = project.clone();
+                let scene_id = scene_id.to_string();
+                let dd = dd.clone();
+                let tdur = tdur.clone();
+                move || {
+                    let mut project = project.clone();
+                    if let Some(sc) = project.scenes.iter_mut().find(|x| x.id == scene_id) {
+                        sc.transition = match dd.selected() {
+                            0 => None,
+                            k => Some(document::Transition {
+                                kind: match k {
+                                    1 => document::TransitionKind::Crossfade,
+                                    2 => document::TransitionKind::WipeLr,
+                                    3 => document::TransitionKind::WipeTb,
+                                    4 => document::TransitionKind::BoxWipe,
+                                    5 => document::TransitionKind::Iris,
+                                    _ => document::TransitionKind::Clock,
+                                },
+                                duration: tdur.value(),
+                            }),
+                        };
+                    }
+                    this.commit_document(project);
+                }
+            };
+            let a2 = apply.clone();
+            dd.connect_selected_notify(move |_| apply());
+            tdur.connect_value_changed(move |_| a2());
+        }
+        uiref.inspector.append(&form);
+    }
+
     /// Templates tab: every def, instantiable at the playhead.
     fn rebuild_templates(self: &Rc<Self>) {
         let ui = self.ui.borrow();
@@ -661,8 +791,32 @@ impl Editor {
             let Some(project) = st.project.as_ref() else { return };
             project.defs.iter().map(|(n, d)| (n.clone(), d.params.clone())).collect()
         };
+        let cache = self.base_dir().join(".dualcut-cache");
+        let def_hashes: std::collections::BTreeMap<String, String> = {
+            let st = self.state.borrow();
+            st.project.as_ref().map_or_else(Default::default, |p| {
+                p.defs
+                    .iter()
+                    .map(|(n, d)| {
+                        (n.clone(), format!(
+                            "tpl-{:016x}.png",
+                            fx_hash(&serde_json::to_string(d).unwrap_or_default())
+                        ))
+                    })
+                    .collect()
+            })
+        };
         for (name, params) in defs {
             let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            if let Some(key) = def_hashes.get(&name) {
+                let path = cache.join(key);
+                if path.exists() {
+                    let pic = gtk::Picture::for_filename(&path);
+                    pic.set_size_request(-1, 90);
+                    pic.set_content_fit(gtk::ContentFit::Contain);
+                    row.append(&pic);
+                }
+            }
             row.set_margin_top(4);
             row.set_margin_bottom(4);
             row.set_margin_start(6);
@@ -887,8 +1041,12 @@ impl Editor {
         sel_ops.append(&save_tpl);
         uiref.inspector.append(&sel_ops);
 
-        // Editor form for the selected clip.
+        // Editor form for the selected clip (or scene).
         let Some(selected) = selected else { return };
+        if let Some(scene_id) = selected.strip_prefix("scene:") {
+            self.build_scene_form(uiref, &project, scene_id);
+            return;
+        }
         let Some(clip) = find_clip(&project, &selected).cloned() else { return };
 
         let form = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -1104,7 +1262,139 @@ impl Editor {
             easing: document::Easing::EaseOut,
             keyframes: Vec::new(),
         });
+        if matches!(
+            clip.element,
+            document::Element::Audio { .. } | document::Element::Video { .. }
+        ) {
+            add_preset("+ Audio in", |_| document::Anim {
+                property: document::AnimProperty::Volume,
+                from: 0.0, to: 1.0, start: 0.0, end: 1.0,
+                easing: document::Easing::EaseOut,
+                keyframes: Vec::new(),
+            });
+            add_preset("+ Audio out", |c| document::Anim {
+                property: document::AnimProperty::Volume,
+                from: 1.0, to: 0.0,
+                start: (c.duration - 1.0).max(0.0), end: c.duration.max(1.0),
+                easing: document::Easing::EaseIn,
+                keyframes: Vec::new(),
+            });
+        }
         form.append(&presets);
+
+        // Effects.
+        let fx_head = gtk::Label::new(Some("Effects"));
+        fx_head.add_css_class("heading");
+        fx_head.set_halign(gtk::Align::Start);
+        fx_head.set_margin_top(8);
+        form.append(&fx_head);
+        for (fi, effect) in clip.effects.iter().enumerate() {
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            let commit_fx = {
+                let this = self.clone();
+                let project = project.clone();
+                let clip_id = clip.id.clone();
+                Rc::new(move |f: Box<dyn Fn(&mut document::Effect)>| {
+                    let mut project = project.clone();
+                    if let Some(c) = find_clip_mut(&mut project, &clip_id)
+                        && let Some(e) = c.effects.get_mut(fi) {
+                            f(e);
+                        }
+                    this.commit_document(project);
+                })
+            };
+            let fx_spin = |label: &str, value: f64, min: f64, max: f64, step: f64| {
+                let l = gtk::Label::new(Some(label));
+                l.add_css_class("dim-label");
+                let s = gtk::SpinButton::with_range(min, max, step);
+                s.set_value(value);
+                (l, s)
+            };
+            match effect {
+                document::Effect::Blur { amount } => {
+                    let (l, s) = fx_spin("Blur", *amount, 0.0, 50.0, 0.5);
+                    row.append(&l);
+                    row.append(&s);
+                    let commit_fx = commit_fx.clone();
+                    s.connect_value_changed(move |s| {
+                        let v = s.value();
+                        commit_fx(Box::new(move |e| {
+                            if let document::Effect::Blur { amount } = e {
+                                *amount = v;
+                            }
+                        }));
+                    });
+                }
+                document::Effect::Color { brightness, contrast, saturation, hue } => {
+                    for (name, val, min, max) in [
+                        ("Bri", *brightness, -1.0, 1.0),
+                        ("Con", *contrast, 0.0, 2.0),
+                        ("Sat", *saturation, 0.0, 2.0),
+                        ("Hue", *hue, -1.0, 1.0),
+                    ] {
+                        let (l, s) = fx_spin(name, val, min, max, 0.05);
+                        row.append(&l);
+                        row.append(&s);
+                        let commit_fx = commit_fx.clone();
+                        s.connect_value_changed(move |s| {
+                            let v = s.value();
+                            commit_fx(Box::new(move |e| {
+                                if let document::Effect::Color {
+                                    brightness, contrast, saturation, hue,
+                                } = e
+                                {
+                                    match name {
+                                        "Bri" => *brightness = v,
+                                        "Con" => *contrast = v,
+                                        "Sat" => *saturation = v,
+                                        _ => *hue = v,
+                                    }
+                                }
+                            }));
+                        });
+                    }
+                }
+            }
+            let rm = gtk::Button::from_icon_name("window-close-symbolic");
+            rm.add_css_class("flat");
+            {
+                let this = self.clone();
+                let project = project.clone();
+                let clip_id = clip.id.clone();
+                rm.connect_clicked(move |_| {
+                    let mut project = project.clone();
+                    if let Some(c) = find_clip_mut(&mut project, &clip_id)
+                        && fi < c.effects.len() {
+                            c.effects.remove(fi);
+                        }
+                    this.commit_document(project);
+                });
+            }
+            row.append(&rm);
+            form.append(&row);
+        }
+        let fx_add = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        for (label, make) in [
+            ("+ Blur", document::Effect::Blur { amount: 4.0 }),
+            ("+ Color", document::Effect::Color {
+                brightness: 0.0, contrast: 1.0, saturation: 1.0, hue: 0.0,
+            }),
+        ] {
+            let b = gtk::Button::with_label(label);
+            let this = self.clone();
+            let project = project.clone();
+            let clip_id = clip.id.clone();
+            let make = make.clone();
+            b.connect_clicked(move |_| {
+                let mut project = project.clone();
+                if let Some(c) = find_clip_mut(&mut project, &clip_id) {
+                    c.effects.push(make.clone());
+                }
+                this.commit_document(project);
+            });
+            fx_add.append(&b);
+        }
+        form.append(&fx_add);
 
         let actions = gtk::Box::new(gtk::Orientation::Horizontal, 6);
         if matches!(clip.element, document::Element::Video { .. }) {

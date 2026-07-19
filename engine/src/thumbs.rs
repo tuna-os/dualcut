@@ -3,6 +3,7 @@
 
 use anyhow::{Context, Result};
 use gst::prelude::*;
+use gstreamer_editing_services as ges;
 use gstreamer as gst;
 use gstreamer_app as gst_app;
 use std::path::{Path, PathBuf};
@@ -121,4 +122,101 @@ pub fn waveform_png(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
     }
     img.save(&file)?;
     Ok(file)
+}
+
+/// Render a one-frame preview of a def instance into the cache; returns
+/// the PNG path. Cached by def content hash. Runs its own short-lived GES
+/// pipeline, so call it off the UI thread.
+pub fn template_png(
+    cache_dir: &Path,
+    project: &crate::document::Project,
+    name: &str,
+    base_dir: &Path,
+) -> Result<PathBuf> {
+    use crate::document::{Clip, Element, Meta, Project, Scene};
+    use ges::prelude::*;
+
+    let def = project
+        .defs
+        .get(name)
+        .with_context(|| format!("unknown def {name:?}"))?;
+    let def_json = serde_json::to_string(def)?;
+    let out = cache_dir.join(format!("tpl-{:016x}.png", fxhash(&def_json)));
+    if out.exists() {
+        return Ok(out);
+    }
+    std::fs::create_dir_all(cache_dir)?;
+
+    // One-second scene holding the instance; params sample as their names.
+    let args = def.params.iter().map(|p| (p.clone(), p.to_uppercase())).collect();
+    let mini = Project {
+        meta: Meta {
+            title: name.into(),
+            width: project.meta.width,
+            height: project.meta.height,
+            fps: project.meta.fps,
+        },
+        defs: project.defs.clone(),
+        scenes: vec![Scene {
+            id: "tpl".into(),
+            name: String::new(),
+            duration: 1.0,
+            transition: None,
+            layers: vec![Clip {
+                id: "inst".into(),
+                start: 0.0,
+                duration: 0.0,
+                element: Element::CompRef { r#ref: name.into(), args },
+                transform: Default::default(),
+                animations: vec![],
+                effects: vec![],
+            }],
+        }],
+        overlays: vec![],
+    };
+    let compiled = crate::mapping::compile(&mini, base_dir)?;
+
+    let pipeline = ges::Pipeline::new();
+    pipeline.set_timeline(&compiled.timeline).map_err(|e| anyhow::anyhow!("{e}"))?;
+    let sink = gst_app::AppSink::builder()
+        .caps(
+            &gst::Caps::builder("video/x-raw")
+                .field("format", "RGBA")
+                .field("width", 320i32)
+                .field("height", 180i32)
+                .build(),
+        )
+        .build();
+    let bin = gst::Bin::new();
+    let convert = gst::ElementFactory::make("videoconvert").build()?;
+    let scale = gst::ElementFactory::make("videoscale").build()?;
+    bin.add_many([&convert, &scale, sink.upcast_ref()])?;
+    gst::Element::link_many([&convert, &scale, sink.upcast_ref()])?;
+    let pad = convert.static_pad("sink").context("convert sink pad")?;
+    bin.add_pad(&gst::GhostPad::with_target(&pad)?)?;
+    pipeline.set_video_sink(Some(&bin));
+
+    pipeline.set_state(gst::State::Paused)?;
+    let (res, _, _) = pipeline.state(gst::ClockTime::from_seconds(5));
+    res.map_err(|e| anyhow::anyhow!("preroll failed: {e}"))?;
+    // Discard the t=0 preroll, then seek near the end so intro
+    // animations have landed; the flush produces a fresh preroll.
+    let _ = sink.try_pull_preroll(gst::ClockTime::from_seconds(5));
+    pipeline.seek_simple(
+        gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
+        gst::ClockTime::from_mseconds(900),
+    )?;
+    let (res, _, _) = pipeline.state(gst::ClockTime::from_seconds(5));
+    res.map_err(|e| anyhow::anyhow!("post-seek preroll failed: {e}"))?;
+    let sample = sink
+        .try_pull_preroll(gst::ClockTime::from_seconds(5))
+        .context("no preroll sample")?;
+    let buffer = sample.buffer().context("no buffer")?;
+    let map = buffer.map_readable()?;
+    let img: image::RgbaImage =
+        image::ImageBuffer::from_raw(320, 180, map.as_slice().to_vec())
+            .context("bad frame stride")?;
+    let _ = pipeline.set_state(gst::State::Null);
+    img.save(&out)?;
+    Ok(out)
 }
