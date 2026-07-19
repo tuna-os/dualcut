@@ -183,7 +183,7 @@ impl Editor {
                         this.write_and_rebuild(&path, project);
                         if let Some(win) = this.window() {
                             win.set_title(Some(&format!(
-                                "dualcut — {}",
+                                "Dualcut — {}",
                                 path.file_name().and_then(|n| n.to_str()).unwrap_or("project")
                             )));
                         }
@@ -223,7 +223,7 @@ impl Editor {
                 remember_recent(path);
                 if let Some(win) = self.window() {
                     win.set_title(Some(&format!(
-                        "dualcut — {}",
+                        "Dualcut — {}",
                         path.file_name().and_then(|n| n.to_str()).unwrap_or("project")
                     )));
                 }
@@ -2053,10 +2053,10 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     let (pipeline, paintable) = make_pipeline(&timeline)?;
     let window_title = match &project_path {
         Some(p) => format!(
-            "dualcut — {}",
+            "Dualcut — {}",
             p.file_name().and_then(|n| n.to_str()).unwrap_or("project")
         ),
-        None => "dualcut — New Project (unsaved)".to_string(),
+        None => "Dualcut — New Project (unsaved)".to_string(),
     };
     let mtime = project_path.as_ref().and_then(|p| p.metadata().ok()?.modified().ok());
 
@@ -2710,7 +2710,7 @@ add files to import first"));
                     st.selected = None;
                 }
                 if let Some(win) = editor.window() {
-                    win.set_title(Some("dualcut — New Project (unsaved)"));
+                    win.set_title(Some("Dualcut — New Project (unsaved)"));
                 }
                 editor.rebuild_in_memory(project);
             });
