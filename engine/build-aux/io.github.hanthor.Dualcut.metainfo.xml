@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.15.0" date="2026-07-19">
+      <description>
+        <p>Inspector restructure: Clips tab, parameters-only right pane, Transitions/Keyframes sections, wrapped presets.</p>
+      </description>
+    </release>
     <release version="0.14.0" date="2026-07-19">
       <description>
         <p>Timeline ruler with live playhead + zoom slider, click-to-select clips, library thumbnail refresh, H.264/AAC decoding in the flatpak.</p>
