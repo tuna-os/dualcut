@@ -2157,8 +2157,8 @@ fn show_about(window: Option<&gtk::Window>) {
         .version(env!("CARGO_PKG_VERSION"))
         .developer_name("James Reilly")
         .developers(["James Reilly (hanthor)", "KiKaraage"])
-        .website("https://github.com/hanthor/dualcut")
-        .issue_url("https://github.com/hanthor/dualcut/issues")
+        .website("https://github.com/tuna-os/dualcut")
+        .issue_url("https://github.com/tuna-os/dualcut/issues")
         .comments("Dual-mode video editor: a GUI for humans and a JSON/TypeScript surface for agents, on one GStreamer Editing Services engine.")
         .build();
     about.present(window);

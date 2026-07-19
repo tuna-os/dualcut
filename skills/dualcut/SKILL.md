@@ -19,7 +19,7 @@ JSON Schema: [engine/schema/dualcut.schema.json](../../engine/schema/dualcut.sch
 
 App (Flatpak, released builds):
 ```sh
-curl -LO https://github.com/hanthor/dualcut/releases/latest/download/dualcut.flatpak
+curl -LO https://github.com/tuna-os/dualcut/releases/latest/download/dualcut.flatpak
 flatpak install --user --reinstall -y dualcut.flatpak
 flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json   # opens + serves API
 ```

@@ -25,9 +25,9 @@
     <name>KiKaraage</name>
   </developer>
   <launchable type="desktop-id">io.github.hanthor.Dualcut.desktop</launchable>
-  <url type="homepage">https://github.com/hanthor/dualcut</url>
-  <url type="bugtracker">https://github.com/hanthor/dualcut/issues</url>
-  <url type="vcs-browser">https://github.com/hanthor/dualcut</url>
+  <url type="homepage">https://github.com/tuna-os/dualcut</url>
+  <url type="bugtracker">https://github.com/tuna-os/dualcut/issues</url>
+  <url type="vcs-browser">https://github.com/tuna-os/dualcut</url>
   <content_rating type="oars-1.1"/>
   <supports>
     <control>pointing</control>

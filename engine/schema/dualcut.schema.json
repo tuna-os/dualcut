@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://github.com/hanthor/dualcut/blob/main/engine/schema/dualcut.schema.json",
+  "$id": "https://github.com/tuna-os/dualcut/blob/main/engine/schema/dualcut.schema.json",
   "title": "dualcut project document",
   "type": "object",
   "required": [

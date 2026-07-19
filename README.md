@@ -14,7 +14,7 @@ HTTP API for agents) — every surface stays in sync while the app runs.
 **Install / update (Flatpak):**
 
 ```sh
-curl -LO https://github.com/hanthor/dualcut/releases/latest/download/dualcut.flatpak && flatpak install --user --reinstall -y dualcut.flatpak
+curl -LO https://github.com/tuna-os/dualcut/releases/latest/download/dualcut.flatpak && flatpak install --user --reinstall -y dualcut.flatpak
 flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json
 ```
 
@@ -64,5 +64,5 @@ for the canonical dependency list.
 - Releases: every `v*` tag auto-builds the Flatpak (`scripts/release.sh`)
 
 Roadmap and status: [ROADMAP.md](ROADMAP.md) ·
-open work: [issues](https://github.com/hanthor/dualcut/issues)
+open work: [issues](https://github.com/tuna-os/dualcut/issues)
 

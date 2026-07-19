@@ -1009,6 +1009,76 @@ mod tests {
     }
 
     #[test]
+    fn document_round_trips_exactly() {
+        let mut p = demo();
+        // Exercise every optional surface so serialization gaps surface.
+        p.library.push("assets/ball.mp4".into());
+        p.overlays[0].muted = true;
+        p.overlays[0].hidden = true;
+        if let Some(c) = find_clip_mut(&mut p, "intro-title") {
+            if let Element::Text { align, outline, shadow, .. } = &mut c.element {
+                *align = Some(TextAlign::Right);
+                *outline = Some("#102030".into());
+                *shadow = true;
+            }
+            c.effects.push(Effect::ChromaKey {
+                color: "#00ff00".into(), angle: 30.0, noise: 4.0,
+            });
+            c.effects.push(Effect::Eq { low: -6.0, mid: 0.0, high: 3.0 });
+            c.animations.push(Anim {
+                property: AnimProperty::Volume,
+                from: 0.0, to: 0.0, start: 0.0, end: 0.0,
+                easing: Easing::Linear,
+                keyframes: vec![
+                    Keyframe { t: 0.0, value: 1.0, easing: Easing::Linear },
+                    Keyframe { t: 1.0, value: 0.2, easing: Easing::EaseOut },
+                ],
+            });
+        }
+        let json = p.to_json();
+        let back = Project::from_json(&json).expect("round trip parses");
+        assert_eq!(json, back.to_json(), "serialize -> parse -> serialize must be stable");
+    }
+
+    #[test]
+    fn validation_rejects_bad_documents() {
+        // Duplicate ids.
+        let mut p = demo();
+        let dup = p.scenes[0].layers[0].clone();
+        p.scenes[0].layers.push(dup);
+        assert!(p.validate().is_err(), "duplicate ids must fail");
+        // Bad transition duration.
+        let mut p = demo();
+        if let Some(t) = &mut p.scenes[1].transition {
+            t.duration = -1.0;
+        }
+        assert!(p.validate().is_err() || p.scenes[1].transition.is_none());
+        // Unknown compref.
+        let mut p = demo();
+        p.scenes[0].layers[0].element =
+            Element::CompRef { r#ref: "missing".into(), args: Default::default() };
+        assert!(p.validate().is_err(), "unknown def must fail");
+        // Out-of-range effect.
+        let mut p = demo();
+        p.scenes[0].layers[0].effects.push(Effect::Eq { low: -99.0, mid: 0.0, high: 0.0 });
+        assert!(p.validate().is_err(), "eq out of range must fail");
+        // Out-of-range chromakey.
+        let mut p = demo();
+        p.scenes[0].layers[0].effects.push(Effect::ChromaKey {
+            color: "#00ff00".into(), angle: 0.5, noise: 0.0,
+        });
+        assert!(p.validate().is_err(), "chromakey angle out of range must fail");
+    }
+
+    #[test]
+    fn split_rejects_edges_and_unknown() {
+        let mut p = demo();
+        assert!(split_clip(&mut p, "nope", 1.0).is_err());
+        // At the very start of the clip: rejected.
+        assert!(split_clip(&mut p, "media-ball", 3.0).is_err());
+    }
+
+    #[test]
     fn ripple_delete_closes_gaps() {
         let mut p = demo();
         p.overlays[0].clips.push(Clip {

@@ -1,0 +1,71 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: Lint, unit, and render smoke tests
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/fedora/fedora:44
+    steps:
+      # checkout degrades to a tarball without git in the container.
+      - name: Install git first
+        run: dnf install -y -q git
+
+      - uses: actions/checkout@v4
+
+      - name: Install toolchain + runtime
+        run: |
+          dnf install -y -q cargo rust clippy clang-devel pkgconf-pkg-config \
+            gtk4-devel libadwaita-devel gstreamer1-devel \
+            gstreamer1-plugins-base-devel gst-editing-services-devel \
+            gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+            gstreamer1-plugins-base-tools gstreamer1-plugins-good-extras \
+            mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
+          git config --global --add safe.directory "$(pwd)"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+
+      - name: Clippy (warnings are errors)
+        working-directory: engine
+        run: cargo clippy --all-features -- -D warnings
+
+      - name: Unit tests
+        working-directory: engine
+        run: cargo test --all-features
+
+      - name: Build release render binary
+        working-directory: engine
+        run: cargo build --release --features vector
+
+      - name: Render smoke suite
+        run: tests/smoke.sh engine/target/release/render
+
+      - name: Build app binary
+        working-directory: engine
+        run: cargo build --features preview,scripting,vector
+
+      - name: App start smoke (headless)
+        run: |
+          Xvfb :95 -screen 0 1280x800x24 &
+          sleep 2
+          set +e
+          GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=:95 \
+            DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
+            DUALCUT_API_PORT=0 DUALCUT_WALKTHROUGH=1 \
+            timeout 120 engine/target/debug/preview engine/examples/demo-project.json \
+            > /tmp/app.log 2>&1
+          code=$?
+          set -e
+          grep -q "WALKTHROUGH-SHOT about" /tmp/app.log || {
+            echo "app did not reach the final walkthrough step (exit $code)"
+            tail -30 /tmp/app.log
+            exit 1
+          }
+          echo "app walked through all UI states cleanly"
