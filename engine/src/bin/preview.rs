@@ -2664,6 +2664,86 @@ add files to import first"));
         });
     }
 
+    // Walkthrough mode: step through UI states, printing a shot marker
+    // after each settles; scripts/walkthrough.sh screenshots per marker.
+    // Drives the guide images regenerated on every release.
+    if std::env::var("DUALCUT_WALKTHROUGH").is_ok() {
+        let untitled = editor.state.borrow().project_path.is_none();
+        type Step = (&'static str, Box<dyn Fn()>);
+        let mut steps: Vec<Step> = Vec::new();
+        if untitled {
+            steps.push(("new-project", Box::new(|| {})));
+        } else {
+            steps.push(("editor-overview", Box::new(|| {})));
+            {
+                let editor = editor.clone();
+                steps.push(("library", Box::new(move || {
+                    let project = editor.state.borrow().project.clone();
+                    if let Some(mut project) = project {
+                        project.library =
+                            vec!["assets/ball.mp4".into(), "assets/ticks.ogg".into()];
+                        editor.commit_document(project);
+                    }
+                })));
+            }
+            {
+                let tabs = left_tabs.clone();
+                steps.push(("templates", Box::new(move || tabs.set_current_page(Some(1)))));
+            }
+            {
+                let tabs = left_tabs.clone();
+                steps.push(("code-view", Box::new(move || tabs.set_current_page(Some(2)))));
+            }
+            {
+                let editor = editor.clone();
+                let tabs = left_tabs.clone();
+                steps.push(("clip-inspector", Box::new(move || {
+                    tabs.set_current_page(Some(0));
+                    editor.state.borrow_mut().selected = Some("media-ball".into());
+                    editor.rebuild_inspector();
+                })));
+            }
+            {
+                let editor = editor.clone();
+                steps.push(("scene-form", Box::new(move || {
+                    editor.state.borrow_mut().selected = Some("scene:scene-media".into());
+                    editor.rebuild_inspector();
+                })));
+            }
+            {
+                let app = app.clone();
+                steps.push(("about", Box::new(move || {
+                    gtk::prelude::ActionGroupExt::activate_action(&app, "about", None);
+                })));
+            }
+        }
+        let steps = Rc::new(steps);
+        let index = Rc::new(std::cell::Cell::new(0usize));
+        let app2 = app.clone();
+        glib::timeout_add_local(std::time::Duration::from_millis(3000), move || {
+            let i = index.get();
+            if i >= steps.len() {
+                // Give the driver time to grab the last frame, then exit.
+                let app3 = app2.clone();
+                glib::timeout_add_local_once(
+                    std::time::Duration::from_millis(1500),
+                    move || app3.quit(),
+                );
+                return glib::ControlFlow::Break;
+            }
+            let (name, run) = &steps[i];
+            run();
+            let name = *name;
+            glib::timeout_add_local_once(std::time::Duration::from_millis(1800), move || {
+                use std::io::Write;
+                println!("WALKTHROUGH-SHOT {name}");
+                let _ = std::io::stdout().flush();
+            });
+            index.set(i + 1);
+            glib::ControlFlow::Continue
+        });
+    }
+
     window.present();
     start_paused(&pipeline)?;
 

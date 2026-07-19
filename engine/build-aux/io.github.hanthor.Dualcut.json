@@ -54,12 +54,17 @@
         "install -Dm644 build-aux/io.github.hanthor.Dualcut.desktop /app/share/applications/io.github.hanthor.Dualcut.desktop",
         "install -Dm644 build-aux/io.github.hanthor.Dualcut.metainfo.xml /app/share/metainfo/io.github.hanthor.Dualcut.metainfo.xml",
         "install -Dm644 build-aux/io.github.hanthor.Dualcut.svg /app/share/icons/hicolor/scalable/apps/io.github.hanthor.Dualcut.svg",
-        "install -Dm644 ../skills/dualcut/SKILL.md /app/share/dualcut/skills/dualcut/SKILL.md"
+        "install -Dm644 skills-src/dualcut/SKILL.md /app/share/dualcut/skills/dualcut/SKILL.md"
       ],
       "sources": [
         {
           "type": "dir",
           "path": ".."
+        },
+        {
+          "type": "dir",
+          "path": "../../skills",
+          "dest": "skills-src"
         },
         {
           "type": "file",

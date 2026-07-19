@@ -43,3 +43,49 @@ jobs:
         with:
           files: dualcut.flatpak
           generate_release_notes: true
+
+  user-guide:
+    name: Regenerate user-guide screenshots
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Install build + runtime dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev \
+            libges-1.0-dev libgtk-4-dev libadwaita-1-dev \
+            gstreamer1.0-plugins-good gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-ugly gstreamer1.0-libav gstreamer1.0-tools \
+            mesa-vulkan-drivers xvfb x11-apps python3-pil
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+
+      - name: Build preview binary
+        working-directory: engine
+        run: cargo build --features preview,scripting,vector
+
+      - name: Run walkthrough
+        run: scripts/walkthrough.sh engine/target/debug/preview
+
+      - name: Commit refreshed screenshots
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/guide
+          if git diff --cached --quiet; then
+            echo "guide unchanged"
+          else
+            git commit -m "docs: refresh user-guide screenshots for ${GITHUB_REF_NAME}"
+            git push origin main
+          fi
