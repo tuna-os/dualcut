@@ -49,18 +49,8 @@ pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled
     // GES layers as its deepest def expansion needs: multi-layer defs put
     // each def layer on its own GES layer (same-layer full overlaps are
     // invalid in GES).
-    let slot_depth = |clips: &[Clip]| -> usize {
-        clips
-            .iter()
-            .map(|c| match &c.element {
-                Element::CompRef { r#ref, .. } => {
-                    project.defs.get(r#ref).map_or(1, |d| d.layers.len().max(1))
-                }
-                _ => 1,
-            })
-            .max()
-            .unwrap_or(1)
-    };
+    let slot_depth =
+        |clips: &[Clip]| -> usize { clips.iter().map(|c| clip_slot_depth(project, c)).max().unwrap_or(1) };
 
     let mut slots: Vec<Vec<ges::Layer>> = Vec::new();
     let overlay_count = project.overlays.len();
@@ -100,6 +90,8 @@ pub fn compile(project: &Project, base_dir: &std::path::Path) -> Result<Compiled
         }
     }
 
+    timeline.commit_sync();
+    retype_transitions(project, &timeline);
     timeline.commit_sync();
     Ok(Compiled { timeline, warnings })
 }
@@ -151,8 +143,14 @@ fn add_clip(
                 media.set_supported_formats(ges::TrackType::AUDIO);
             }
             layer.add_clip(&media)?;
-            if (*volume - 1.0).abs() > f64::EPSILON {
-                let _ = media.set_child_property("volume", volume.to_value());
+            // Volume rides an explicit effect; GES's own child-property
+            // route scales values wrongly on this GStreamer (see ADR).
+            let animates_volume =
+                clip.animations.iter().any(|a| a.property == AnimProperty::Volume);
+            if (*volume - 1.0).abs() > f64::EPSILON || animates_volume {
+                let fx = ges::Effect::new(&format!("volume name=dcvol volume={volume}"))
+                    .context("volume effect")?;
+                media.add(&fx).context("adding volume effect")?;
             }
             Some(media.upcast())
         }
@@ -166,6 +164,9 @@ fn add_clip(
         }
         Element::Test {} => {
             let test = ges::TestClip::new().context("test clip")?;
+            // Video only: the default audiotestsrc sine would drown real
+            // audio in the mix.
+            test.set_supported_formats(ges::TrackType::VIDEO);
             test.set_start(start);
             test.set_duration(duration);
             test.set_vpattern(ges::VideoTestPattern::Smpte);
@@ -204,17 +205,20 @@ fn add_clip(
         }
         Element::CompRef { r#ref, args } => {
             let def = project.defs.get(r#ref).expect("validated");
-            for (di, sub) in def.layers.iter().enumerate() {
+            // Each def layer gets its own GES layer span within the slot;
+            // nested comprefs consume a span as wide as their own depth.
+            let mut di = 0usize;
+            for sub in &def.layers {
                 let mut sub = substitute(sub, args);
                 sub.id = format!("{}/{}", clip.id, sub.id);
                 sub.start += clip.start;
                 if sub.duration <= 0.0 {
                     sub.duration = clip.duration - (sub.start - clip.start);
                 }
-                // Each def layer gets its own GES layer within the slot.
                 let sub_slot = &slot[di.min(slot.len() - 1)..];
                 add_clip(project, sub_slot, &sub, offset, base_dir, warnings)
                     .with_context(|| format!("def {:?} layer {:?}", r#ref, sub.id))?;
+                di += clip_slot_depth(project, &sub);
             }
             None
         }
@@ -222,6 +226,7 @@ fn add_clip(
 
     if let Some(ges_clip) = ges_clip {
         apply_transform_and_animations(project, &ges_clip, clip, warnings)?;
+        apply_effects(&ges_clip, clip, warnings);
     }
     Ok(())
 }
@@ -263,6 +268,7 @@ fn apply_transform_and_animations(
             AnimProperty::Y => "posy",
             AnimProperty::Width => "width",
             AnimProperty::Height => "height",
+            AnimProperty::Volume => "volume",
         };
         by_prop.entry(prop).or_default().push(anim);
     }
@@ -338,20 +344,118 @@ fn apply_property_animations(
     set(clip_end, last_v);
 
     let source: gst::ControlSource = cs.upcast();
-    element
-        .set_control_source(&source, prop, "direct-absolute")
-        .then_some(())
-        .context("set_control_source failed")?;
+    if prop == "volume" {
+        // Bind straight to the gst volume element inside the clip's volume
+        // effect: raw values, no GES child-property scaling.
+        let fx = ges_clip
+            .children(false)
+            .into_iter()
+            .filter_map(|c| c.downcast::<ges::Effect>().ok())
+            .find(|e| ges::prelude::TimelineElementExt::lookup_child(e, "volume").is_some())
+            .context("no volume effect on clip")?;
+        let bin = fx
+            .nleobject()
+            .downcast::<gst::Bin>()
+            .map_err(|_| anyhow::anyhow!("effect nleobject is not a bin"))?;
+        let vol = find_by_factory(&bin, "volume").context("no volume element in effect")?;
+        let binding = gst_controller::DirectControlBinding::new_absolute(&vol, "volume", &source);
+        vol.add_control_binding(&binding)?;
+    } else {
+        element
+            .set_control_source(&source, prop, "direct-absolute")
+            .then_some(())
+            .context("set_control_source failed")?;
+    }
     Ok(())
 }
 
 /// Control sources take normalized doubles for some properties; GES
 /// "direct-absolute" mode takes raw values, so only alpha needs clamping.
+/// GES layers a clip needs: 1, or for comprefs the sum of its def's
+/// layers' needs (validation rejects cycles).
+fn clip_slot_depth(project: &Project, clip: &Clip) -> usize {
+    match &clip.element {
+        Element::CompRef { r#ref, .. } => project
+            .defs
+            .get(r#ref)
+            .map_or(1, |d| d.layers.iter().map(|l| clip_slot_depth(project, l)).sum::<usize>().max(1)),
+        _ => 1,
+    }
+}
+
+/// Depth-first search for an element by factory name inside a bin.
+fn find_by_factory(bin: &gst::Bin, factory: &str) -> Option<gst::Element> {
+    bin.iterate_recurse()
+        .into_iter()
+        .flatten()
+        .find(|child| child.factory().is_some_and(|f| f.name() == factory))
+}
+
+/// Attach the clip's effects chain. Runs after the clip joins a layer so
+/// GES can create the effect track elements.
+fn apply_effects(ges_clip: &ges::Clip, clip: &Clip, warnings: &mut Vec<String>) {
+    for effect in &clip.effects {
+        let desc = match effect {
+            crate::document::Effect::Blur { amount } => format!("gaussianblur sigma={amount}"),
+            crate::document::Effect::Color { brightness, contrast, saturation, hue } => format!(
+                "videobalance brightness={brightness} contrast={contrast} saturation={saturation} hue={hue}"
+            ),
+        };
+        let fx = ges::Effect::new(&desc);
+        match fx {
+            Ok(fx) => {
+                if let Err(e) = ges_clip.add(&fx) {
+                    warnings.push(format!("clip {:?}: effect {desc:?} not added: {e}", clip.id));
+                }
+            }
+            Err(e) => warnings.push(format!("clip {:?}: effect {desc:?} unavailable: {e}", clip.id)),
+        }
+    }
+}
+
+/// GES auto-transitions are crossfades; retype the video transitions that
+/// fall inside a scene boundary whose document transition asks for a wipe.
+fn retype_transitions(project: &Project, timeline: &ges::Timeline) {
+    use ges::VideoStandardTransitionType as V;
+    let mut wanted: Vec<(f64, f64, V)> = Vec::new();
+    for (i, scene) in project.scenes.iter().enumerate().skip(1) {
+        if let Some(tr) = &scene.transition {
+            let vtype = match tr.kind {
+                crate::document::TransitionKind::Crossfade => continue,
+                crate::document::TransitionKind::WipeLr => V::BarWipeLr,
+                crate::document::TransitionKind::WipeTb => V::BarWipeTb,
+                crate::document::TransitionKind::BoxWipe => V::BoxWipeTl,
+                crate::document::TransitionKind::Iris => V::IrisRect,
+                crate::document::TransitionKind::Clock => V::ClockCw12,
+            };
+            let start = project.scene_offset(i);
+            wanted.push((start, start + tr.duration, vtype));
+        }
+    }
+    if wanted.is_empty() {
+        return;
+    }
+    for layer in timeline.layers() {
+        for clip in layer.clips() {
+            if let Ok(tclip) = clip.downcast::<ges::TransitionClip>() {
+                let start = tclip.start().nseconds() as f64 / 1e9;
+                let end = start + tclip.duration().nseconds() as f64 / 1e9;
+                for (ws, we, vtype) in &wanted {
+                    // Auto transitions sit exactly in the overlap window.
+                    if start >= ws - 0.01 && end <= we + 0.01 {
+                        tclip.set_property("vtype", vtype);
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn normalize(prop: &str, value: f64) -> f64 {
-    if prop == "alpha" {
-        value.clamp(0.0, 1.0)
-    } else {
-        value
+    match prop {
+        "alpha" => value.clamp(0.0, 1.0),
+        "volume" => value.max(0.0),
+        _ => value,
     }
 }
 
@@ -385,6 +489,13 @@ fn substitute(clip: &Clip, args: &BTreeMap<String, String>) -> Clip {
         }
         Element::Video { src, .. } | Element::Audio { src, .. } | Element::Image { src } => {
             apply(src)
+        }
+        Element::Shape { fill, .. } => apply(fill),
+        // Nested defs: pass substitutions through the inner instantiation's args.
+        Element::CompRef { args: inner, .. } => {
+            for v in inner.values_mut() {
+                apply(v);
+            }
         }
         _ => {}
     }

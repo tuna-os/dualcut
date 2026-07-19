@@ -68,6 +68,14 @@ pub struct Transition {
 pub enum TransitionKind {
     #[default]
     Crossfade,
+    #[serde(rename = "wipe-lr")]
+    WipeLr,
+    #[serde(rename = "wipe-tb")]
+    WipeTb,
+    #[serde(rename = "box-wipe")]
+    BoxWipe,
+    Iris,
+    Clock,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -95,6 +103,32 @@ pub struct Clip {
     pub transform: Transform,
     #[serde(default)]
     pub animations: Vec<Anim>,
+    /// Video effects applied in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub effects: Vec<Effect>,
+}
+
+/// A video effect on one clip.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum Effect {
+    /// Gaussian blur; `amount` is the blur sigma (0-50, ~3 is subtle).
+    Blur { amount: f64 },
+    /// Color balance. Neutral is brightness 0, contrast 1, saturation 1, hue 0.
+    Color {
+        #[serde(default)]
+        brightness: f64,
+        #[serde(default = "default_one")]
+        contrast: f64,
+        #[serde(default = "default_one")]
+        saturation: f64,
+        #[serde(default)]
+        hue: f64,
+    },
+}
+
+fn default_one() -> f64 {
+    1.0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -217,6 +251,8 @@ pub enum AnimProperty {
     Width,
     Height,
     Opacity,
+    /// Audio volume (0.0 silent, 1.0 unity). Audio/video clips only.
+    Volume,
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,12 +331,26 @@ impl Project {
                 clip.validate(&self.defs)?;
             }
         }
-        for (name, def) in &self.defs {
+        for def in self.defs.values() {
             for clip in &def.layers {
-                if let Element::CompRef { r#ref, .. } = &clip.element {
-                    bail!("def {name:?} references def {ref:?}: defs cannot nest (yet)");
-                }
                 clip.validate(&self.defs)?;
+            }
+        }
+        // Defs may nest, but reference cycles would expand forever.
+        for start in self.defs.keys() {
+            let mut stack = vec![(start.clone(), vec![start.clone()])];
+            while let Some((name, path)) = stack.pop() {
+                let Some(def) = self.defs.get(&name) else { continue };
+                for clip in &def.layers {
+                    if let Element::CompRef { r#ref, .. } = &clip.element {
+                        if path.contains(r#ref) {
+                            bail!("def cycle: {} -> {:?}", path.join(" -> "), r#ref);
+                        }
+                        let mut next = path.clone();
+                        next.push(r#ref.clone());
+                        stack.push((r#ref.clone(), next));
+                    }
+                }
             }
         }
         Ok(())
@@ -323,6 +373,27 @@ impl Clip {
                 }
                 if anim.keyframes.windows(2).any(|w| w[1].t <= w[0].t) {
                     bail!("clip {:?}: keyframes must be in strictly increasing time order", self.id);
+                }
+            }
+        }
+        for effect in &self.effects {
+            match effect {
+                Effect::Blur { amount } => {
+                    if !(0.0..=50.0).contains(amount) {
+                        bail!("clip {:?}: blur amount must be 0-50", self.id);
+                    }
+                }
+                Effect::Color { brightness, contrast, saturation, hue } => {
+                    if !(-1.0..=1.0).contains(brightness)
+                        || !(0.0..=2.0).contains(contrast)
+                        || !(0.0..=2.0).contains(saturation)
+                        || !(-1.0..=1.0).contains(hue)
+                    {
+                        bail!(
+                            "clip {:?}: color ranges are brightness/hue -1..1, contrast/saturation 0..2",
+                            self.id
+                        );
+                    }
                 }
             }
         }
@@ -427,6 +498,7 @@ pub fn detach_audio(project: &mut Project, id: &str) -> Option<String> {
         element: Element::Audio { src, offset, volume },
         transform: Default::default(),
         animations: Vec::new(),
+        effects: Vec::new(),
     };
     if let Some(track) = project.overlays.iter_mut().find(|t| t.id == "detached-audio") {
         track.clips.push(audio);
@@ -523,6 +595,7 @@ pub fn move_clip_to_lane(
                 element: Element::Test {},
                 transform: Transform { opacity: 0.0, ..Default::default() },
                 animations: Vec::new(),
+                effects: Vec::new(),
             });
         }
         scene.layers.insert(lane.min(scene.layers.len()), clip);
@@ -647,6 +720,59 @@ mod tests {
         let clip = p.overlays[0].clips.iter().find(|c| c.id == "wm-text").unwrap();
         assert_eq!(clip.start, 2.5);
         assert!(p.validate().is_ok());
+    }
+
+    #[test]
+    fn nested_defs_expand_and_cycles_fail() {
+        let mut p = demo();
+        p.defs.insert("inner".into(), CompDef {
+            params: vec!["msg".into()],
+            layers: vec![Clip {
+                id: "in-t".into(), start: 0.0, duration: 0.0,
+                element: Element::Text {
+                    text: "{msg}".into(), font: default_font(), color: default_color(),
+                },
+                transform: Default::default(), animations: vec![], effects: vec![],
+            }],
+        });
+        p.defs.insert("outer".into(), CompDef {
+            params: vec!["msg".into()],
+            layers: vec![Clip {
+                id: "out-ref".into(), start: 0.0, duration: 0.0,
+                element: Element::CompRef {
+                    r#ref: "inner".into(),
+                    args: [("msg".to_string(), "{msg}".to_string())].into(),
+                },
+                transform: Default::default(), animations: vec![], effects: vec![],
+            }],
+        });
+        assert!(p.validate().is_ok());
+        // introduce a cycle inner -> outer
+        p.defs.get_mut("inner").unwrap().layers[0].element = Element::CompRef {
+            r#ref: "outer".into(), args: Default::default(),
+        };
+        assert!(p.validate().is_err());
+    }
+
+    #[test]
+    fn effects_and_volume_anim_validate() {
+        let mut p = demo();
+        if let Some(c) = find_clip_mut(&mut p, "media-ball") {
+            c.effects.push(Effect::Blur { amount: 4.0 });
+            c.effects.push(Effect::Color {
+                brightness: 0.1, contrast: 1.1, saturation: 0.8, hue: 0.0,
+            });
+            c.animations.push(Anim {
+                property: AnimProperty::Volume,
+                from: 1.0, to: 0.0, start: 2.0, end: 3.0,
+                easing: Easing::EaseOut, keyframes: vec![],
+            });
+        }
+        assert!(p.validate().is_ok());
+        if let Some(c) = find_clip_mut(&mut p, "media-ball") {
+            c.effects.push(Effect::Blur { amount: 99.0 });
+        }
+        assert!(p.validate().is_err());
     }
 
     #[test]

@@ -110,6 +110,7 @@ struct Ui {
     strip: gtk::Box,
     inspector: gtk::Box,
     media_list: gtk::ListBox,
+    templates_list: gtk::ListBox,
     code_buffer: gtk::TextBuffer,
 }
 
@@ -226,6 +227,7 @@ impl Editor {
                 self.rebuild_strip();
                 self.rebuild_inspector();
                 self.rebuild_media();
+                self.rebuild_templates();
                 self.refresh_code();
             }
             Err(e) => eprintln!("rebuild failed (keeping current timeline): {e:#}"),
@@ -641,7 +643,108 @@ impl Editor {
             element,
             transform: Default::default(),
             animations: Vec::new(),
+            effects: Vec::new(),
         });
+        self.state.borrow_mut().selected = Some(id);
+        self.commit_document(project);
+    }
+
+    /// Templates tab: every def, instantiable at the playhead.
+    fn rebuild_templates(self: &Rc<Self>) {
+        let ui = self.ui.borrow();
+        let Some(ui) = ui.as_ref() else { return };
+        while let Some(child) = ui.templates_list.first_child() {
+            ui.templates_list.remove(&child);
+        }
+        let defs: Vec<(String, Vec<String>)> = {
+            let st = self.state.borrow();
+            let Some(project) = st.project.as_ref() else { return };
+            project.defs.iter().map(|(n, d)| (n.clone(), d.params.clone())).collect()
+        };
+        for (name, params) in defs {
+            let row = gtk::Box::new(gtk::Orientation::Vertical, 4);
+            row.set_margin_top(4);
+            row.set_margin_bottom(4);
+            row.set_margin_start(6);
+            row.set_margin_end(6);
+            let head = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            let label = gtk::Label::new(Some(&name));
+            label.set_halign(gtk::Align::Start);
+            label.set_hexpand(true);
+            label.add_css_class("heading");
+            head.append(&label);
+            let insert = gtk::Button::with_label("Insert");
+            insert.add_css_class("flat");
+            head.append(&insert);
+            row.append(&head);
+            let mut entries: Vec<(String, gtk::Entry)> = Vec::new();
+            for p in &params {
+                let entry = gtk::Entry::new();
+                entry.set_placeholder_text(Some(p));
+                row.append(&entry);
+                entries.push((p.clone(), entry));
+            }
+            {
+                let this = self.clone();
+                let name = name.clone();
+                insert.connect_clicked(move |_| {
+                    let args: std::collections::BTreeMap<String, String> = entries
+                        .iter()
+                        .map(|(p, e)| {
+                            let text = e.text().to_string();
+                            (p.clone(), if text.is_empty() { p.clone() } else { text })
+                        })
+                        .collect();
+                    this.insert_template(&name, args);
+                });
+            }
+            let lbrow = gtk::ListBoxRow::new();
+            lbrow.set_child(Some(&row));
+            ui.templates_list.append(&lbrow);
+        }
+    }
+
+    /// Insert a def instance into the scene under the playhead.
+    fn insert_template(
+        self: &Rc<Self>,
+        name: &str,
+        args: std::collections::BTreeMap<String, String>,
+    ) {
+        let (project, time) = {
+            let st = self.state.borrow();
+            let time = st
+                .pipeline
+                .query_position::<gst::ClockTime>()
+                .map(|p| p.nseconds() as f64 / 1e9)
+                .unwrap_or(0.0);
+            (st.project.clone(), time)
+        };
+        let Some(mut project) = project else { return };
+        let mut id = name.to_string();
+        let mut n = 1;
+        while find_clip(&project, &id).is_some() {
+            id = format!("{name}-{n}");
+            n += 1;
+        }
+        let index = (0..project.scenes.len())
+            .rev()
+            .find(|&i| time >= project.scene_offset(i))
+            .unwrap_or(0);
+        let offset = project.scene_offset(index);
+        let scene = &mut project.scenes[index];
+        let start = (time - offset).clamp(0.0, (scene.duration - 0.1).max(0.0));
+        scene.layers.insert(
+            0,
+            document::Clip {
+                id: id.clone(),
+                start,
+                duration: 0.0,
+                element: document::Element::CompRef { r#ref: name.to_string(), args },
+                transform: Default::default(),
+                animations: Vec::new(),
+                effects: Vec::new(),
+            },
+        );
         self.state.borrow_mut().selected = Some(id);
         self.commit_document(project);
     }
@@ -862,7 +965,7 @@ impl Editor {
         anim_head.set_margin_top(8);
         form.append(&anim_head);
 
-        const PROPS: [&str; 5] = ["x", "y", "width", "height", "opacity"];
+        const PROPS: [&str; 6] = ["x", "y", "width", "height", "opacity", "volume"];
         const EASINGS: [&str; 4] = ["linear", "easeIn", "easeOut", "easeInOut"];
         let prop_of = |a: &document::AnimProperty| match a {
             document::AnimProperty::X => 0,
@@ -870,6 +973,7 @@ impl Editor {
             document::AnimProperty::Width => 2,
             document::AnimProperty::Height => 3,
             document::AnimProperty::Opacity => 4,
+            document::AnimProperty::Volume => 5,
         };
         let ease_of = |e: &document::Easing| match e {
             document::Easing::Linear => 0,
@@ -904,7 +1008,8 @@ impl Editor {
                         1 => document::AnimProperty::Y,
                         2 => document::AnimProperty::Width,
                         3 => document::AnimProperty::Height,
-                        _ => document::AnimProperty::Opacity,
+                        4 => document::AnimProperty::Opacity,
+                        _ => document::AnimProperty::Volume,
                     };
                     commit(Box::new(move |a| a.property = value));
                 });
@@ -1672,8 +1777,16 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     code_page.append(&code_apply);
     code_page.append(&code_status);
 
+    let templates_list = gtk::ListBox::new();
+    templates_list.add_css_class("boxed-list");
+    templates_list.set_selection_mode(gtk::SelectionMode::None);
+    let templates_scroll = gtk::ScrolledWindow::new();
+    templates_scroll.set_child(Some(&templates_list));
+    templates_scroll.set_vexpand(true);
+
     let left_tabs = gtk::Notebook::new();
     left_tabs.append_page(&media_scroll, Some(&gtk::Label::new(Some("Media"))));
+    left_tabs.append_page(&templates_scroll, Some(&gtk::Label::new(Some("Templates"))));
     left_tabs.append_page(&code_page, Some(&gtk::Label::new(Some("Code"))));
     left_tabs.set_size_request(260, -1);
 
@@ -1804,10 +1917,12 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     window.present();
     start_paused(&pipeline)?;
 
-    *editor.ui.borrow_mut() = Some(Ui { picture, seek, strip, inspector, media_list, code_buffer });
+    *editor.ui.borrow_mut() =
+        Some(Ui { picture, seek, strip, inspector, media_list, templates_list, code_buffer });
     editor.rebuild_strip();
     editor.rebuild_inspector();
     editor.rebuild_media();
+    editor.rebuild_templates();
     editor.refresh_code();
     Ok(())
 }

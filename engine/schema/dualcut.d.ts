@@ -41,7 +41,7 @@ export interface Scene {
 }
 
 export interface Transition {
-  kind?: "crossfade";
+  kind?: "crossfade" | "wipe-lr" | "wipe-tb" | "box-wipe" | "iris" | "clock";
   /** Seconds of overlap with the previous scene; must be < scene duration. */
   duration: number;
 }
@@ -72,6 +72,8 @@ export interface ClipBase {
   duration?: number;
   transform?: Transform;
   animations?: Anim[];
+  /** Video effects applied in order. */
+  effects?: Effect[];
 }
 
 export interface TextClip {
@@ -132,7 +134,7 @@ export interface Transform {
 }
 
 export interface Anim {
-  property: "x" | "y" | "width" | "height" | "opacity";
+  property: "x" | "y" | "width" | "height" | "opacity" | "volume";
   /** Tween window form (ignored when keyframes is set). */
   from?: number;
   to?: number;
@@ -143,6 +145,16 @@ export interface Anim {
   /** Explicit keyframes (>= 2, strictly increasing t). Wins over the tween. */
   keyframes?: Keyframe[];
 }
+
+export type Effect =
+  | { type: "blur"; /** Blur sigma, 0-50 (~3 is subtle). */ amount: number }
+  | {
+      type: "color";
+      /** -1..1, neutral 0 */ brightness?: number;
+      /** 0..2, neutral 1 */ contrast?: number;
+      /** 0..2, neutral 1 */ saturation?: number;
+      /** -1..1, neutral 0 */ hue?: number;
+    };
 
 export interface Keyframe {
   /** Seconds relative to the clip. */

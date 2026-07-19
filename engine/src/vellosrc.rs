@@ -67,6 +67,40 @@ mod imp {
     }
 
     impl ObjectImpl for VelloSrc {
+        fn properties() -> &'static [glib::ParamSpec] {
+            static PROPS: std::sync::OnceLock<Vec<glib::ParamSpec>> = std::sync::OnceLock::new();
+            PROPS.get_or_init(|| {
+                vec![
+                    glib::ParamSpecString::builder("fill")
+                        .nick("Fill color")
+                        .blurb("Shape fill as #rrggbb / #aarrggbb; changeable while playing")
+                        .build(),
+                    glib::ParamSpecBoolean::builder("spin")
+                        .nick("Spin")
+                        .blurb("Rotate the shape continuously")
+                        .build(),
+                ]
+            })
+        }
+
+        fn set_property(&self, _id: usize, value: &glib::Value, pspec: &glib::ParamSpec) {
+            let mut s = self.settings.lock().unwrap();
+            match pspec.name() {
+                "fill" => s.fill = value.get::<String>().unwrap_or_default(),
+                "spin" => s.spin = value.get::<bool>().unwrap_or_default(),
+                _ => {}
+            }
+        }
+
+        fn property(&self, _id: usize, pspec: &glib::ParamSpec) -> glib::Value {
+            let s = self.settings.lock().unwrap();
+            match pspec.name() {
+                "fill" => s.fill.to_value(),
+                "spin" => s.spin.to_value(),
+                _ => unreachable!(),
+            }
+        }
+
         fn constructed(&self) {
             self.parent_constructed();
             let obj = self.obj();

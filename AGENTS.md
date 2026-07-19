@@ -141,14 +141,19 @@ narrative spine) + **overlays** (tracks crossing scene cuts) + **defs**
 }
 ```
 
-Clip: `{ id, start, duration, type, …element fields, transform?, animations? }`
+Clip: `{ id, start, duration, type, …element fields, transform?, animations?, effects? }`
+- effects: `[{type: "blur", amount}]` (sigma 0-50) and
+  `[{type: "color", brightness?, contrast?, saturation?, hue?}]`
+- scene transition kinds: crossfade | wipe-lr | wipe-tb | box-wipe | iris | clock
+- defs may nest (compref inside a def); cycles are rejected at validation
 - `type`: `text` (text/font/color) · `video`/`audio` (src/offset/volume) ·
   `image` (src) · `shape` (M3, skipped with warning for now) ·
   `compref` (ref + args) · `test`
 - `transform`: `{ x, y, width, height, opacity }` pixels; 0 = natural
 - animations, two forms: tween `{ property, from, to, start, end, easing }`
   or keyframes `{ property, keyframes: [{t, value, easing}, …] }` (>= 2,
-  strictly increasing t; property is x|y|width|height|opacity),
+  strictly increasing t; property is x|y|width|height|opacity|volume;
+  volume 1.0 = unity — animate it for audio fades/ducking),
   times relative to the clip; easing: linear|easeIn|easeOut|easeInOut
 - `duration: 0` on a scene layer = fill the rest of the scene
 

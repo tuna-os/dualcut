@@ -29,6 +29,7 @@ pub fn new_project(title: &str) -> Project {
                 element: crate::document::Element::CompRef { r#ref: "title-card".into(), args },
                 transform: Default::default(),
                 animations: Vec::new(),
+                effects: Vec::new(),
             }],
         }],
         overlays: Vec::new(),
