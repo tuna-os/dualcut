@@ -109,6 +109,8 @@ struct Ui {
     seek: gtk::Scale,
     strip: gtk::Box,
     inspector: gtk::Box,
+    media_list: gtk::ListBox,
+    code_buffer: gtk::TextBuffer,
 }
 
 struct Editor {
@@ -223,6 +225,8 @@ impl Editor {
                 }
                 self.rebuild_strip();
                 self.rebuild_inspector();
+                self.rebuild_media();
+                self.refresh_code();
             }
             Err(e) => eprintln!("rebuild failed (keeping current timeline): {e:#}"),
         }
@@ -535,6 +539,115 @@ impl Editor {
                 Err(_) => glib::ControlFlow::Break,
             }
         });
+    }
+
+    /// Media tab: files in the project dir (and assets/) insertable at the
+    /// playhead into the scene under it.
+    fn rebuild_media(self: &Rc<Self>) {
+        let ui = self.ui.borrow();
+        let Some(ui) = ui.as_ref() else { return };
+        while let Some(child) = ui.media_list.first_child() {
+            ui.media_list.remove(&child);
+        }
+        let base = self.base_dir();
+        const EXTS: [&str; 12] = ["mp4", "webm", "mov", "mkv", "ogg", "mp3", "wav", "flac", "png", "jpg", "jpeg", "webp"];
+        let mut files: Vec<PathBuf> = Vec::new();
+        for dir in [base.clone(), base.join("assets")] {
+            if let Ok(entries) = std::fs::read_dir(&dir) {
+                for entry in entries.flatten() {
+                    let path = entry.path();
+                    let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                    if EXTS.contains(&ext.as_str()) {
+                        files.push(path);
+                    }
+                }
+            }
+        }
+        files.sort();
+        for path in files {
+            let rel = path.strip_prefix(&base).unwrap_or(&path).display().to_string();
+            let row = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+            row.set_margin_top(2);
+            row.set_margin_bottom(2);
+            row.set_margin_start(6);
+            let label = gtk::Label::new(Some(&rel));
+            label.set_halign(gtk::Align::Start);
+            label.set_hexpand(true);
+            label.set_ellipsize(gtk::pango::EllipsizeMode::Middle);
+            row.append(&label);
+            let add = gtk::Button::from_icon_name("list-add-symbolic");
+            add.add_css_class("flat");
+            add.set_tooltip_text(Some("Insert at playhead"));
+            {
+                let this = self.clone();
+                let rel = rel.clone();
+                add.connect_clicked(move |_| this.insert_media(&rel));
+            }
+            row.append(&add);
+            let lbrow = gtk::ListBoxRow::new();
+            lbrow.set_child(Some(&row));
+            ui.media_list.append(&lbrow);
+        }
+    }
+
+    /// Insert a media file as a clip in the scene under the playhead.
+    fn insert_media(self: &Rc<Self>, rel: &str) {
+        let (project, time) = {
+            let st = self.state.borrow();
+            let time = st
+                .pipeline
+                .query_position::<gst::ClockTime>()
+                .map(|p| p.nseconds() as f64 / 1e9)
+                .unwrap_or(0.0);
+            (st.project.clone(), time)
+        };
+        let Some(mut project) = project else { return };
+        let ext = rel.rsplit('.').next().unwrap_or("").to_lowercase();
+        let element = match ext.as_str() {
+            "png" | "jpg" | "jpeg" | "webp" => document::Element::Image { src: rel.to_string() },
+            "ogg" | "mp3" | "wav" | "flac" => {
+                document::Element::Audio { src: rel.to_string(), offset: 0.0, volume: 1.0 }
+            }
+            _ => document::Element::Video { src: rel.to_string(), offset: 0.0, volume: 1.0 },
+        };
+        let mut id_base = rel
+            .chars()
+            .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
+            .collect::<String>();
+        id_base.truncate(24);
+        let mut id = id_base.clone();
+        let mut n = 1;
+        while find_clip(&project, &id).is_some() {
+            id = format!("{id_base}-{n}");
+            n += 1;
+        }
+        let index = (0..project.scenes.len())
+            .rev()
+            .find(|&i| time >= project.scene_offset(i))
+            .unwrap_or(0);
+        let offset = project.scene_offset(index);
+        let scene = &mut project.scenes[index];
+        let start = (time - offset).clamp(0.0, (scene.duration - 0.1).max(0.0));
+        scene.layers.push(document::Clip {
+            id: id.clone(),
+            start,
+            duration: 0.0,
+            element,
+            transform: Default::default(),
+            animations: Vec::new(),
+        });
+        self.state.borrow_mut().selected = Some(id);
+        self.commit_document(project);
+    }
+
+    /// Code tab: the document as editable JSON.
+    fn refresh_code(self: &Rc<Self>) {
+        let ui = self.ui.borrow();
+        let Some(ui) = ui.as_ref() else { return };
+        let st = self.state.borrow();
+        if let Some(project) = st.project.as_ref() {
+            ui.code_buffer.set_text(&project.to_json());
+        }
     }
 
     fn rebuild_inspector(self: &Rc<Self>) {
@@ -866,18 +979,21 @@ impl Editor {
             property: document::AnimProperty::Opacity,
             from: 0.0, to: 1.0, start: 0.0, end: 0.5,
             easing: document::Easing::EaseOut,
+            keyframes: Vec::new(),
         });
         add_preset("+ Fade out", |c| document::Anim {
             property: document::AnimProperty::Opacity,
             from: 1.0, to: 0.0,
             start: (c.duration - 0.5).max(0.0), end: c.duration.max(0.5),
             easing: document::Easing::EaseIn,
+            keyframes: Vec::new(),
         });
         add_preset("+ Slide in", |c| document::Anim {
             property: document::AnimProperty::X,
             from: c.transform.x - 300.0, to: c.transform.x,
             start: 0.0, end: 0.6,
             easing: document::Easing::EaseOut,
+            keyframes: Vec::new(),
         });
         form.append(&presets);
 
@@ -1465,6 +1581,11 @@ fn build_ui(app: &adw::Application) -> Result<()> {
 
     let bar = adw::HeaderBar::new();
     bar.pack_start(&play);
+    let timeline_toggle = gtk::ToggleButton::new();
+    timeline_toggle.set_icon_name("view-continuous-symbolic");
+    timeline_toggle.set_tooltip_text(Some("Toggle timeline pane"));
+    timeline_toggle.set_active(true);
+    bar.pack_start(&timeline_toggle);
     let export = gtk::Button::from_icon_name("document-save-symbolic");
     export.set_tooltip_text(Some("Export video"));
     {
@@ -1482,20 +1603,76 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     transport.set_margin_end(12);
     transport.append(&seek);
 
+    // Bottom pane: the multitrack timeline, toggleable (GNOME Builder style).
     let strip = gtk::Box::new(gtk::Orientation::Vertical, 4);
     strip.set_margin_start(12);
     strip.set_margin_end(12);
     strip.set_margin_bottom(8);
     let strip_scroll = gtk::ScrolledWindow::new();
     strip_scroll.set_child(Some(&strip));
-    strip_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Never);
-    strip_scroll.set_min_content_height(110);
+    strip_scroll.set_policy(gtk::PolicyType::Automatic, gtk::PolicyType::Automatic);
+    strip_scroll.set_min_content_height(150);
+    let bottom = gtk::Revealer::new();
+    bottom.set_child(Some(&strip_scroll));
+    bottom.set_reveal_child(true);
+    bottom.set_transition_type(gtk::RevealerTransitionType::SlideUp);
+    {
+        let bottom = bottom.clone();
+        timeline_toggle.connect_toggled(move |b| bottom.set_reveal_child(b.is_active()));
+    }
 
-    let left = gtk::Box::new(gtk::Orientation::Vertical, 4);
-    left.append(&preview_overlay);
-    left.append(&transport);
-    left.append(&strip_scroll);
+    // Center: preview + transport.
+    let center = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    center.append(&preview_overlay);
+    center.append(&transport);
 
+    // Left: Media | Code tabs.
+    let media_list = gtk::ListBox::new();
+    media_list.add_css_class("boxed-list");
+    media_list.set_selection_mode(gtk::SelectionMode::None);
+    let media_scroll = gtk::ScrolledWindow::new();
+    media_scroll.set_child(Some(&media_list));
+    media_scroll.set_vexpand(true);
+
+    let code_buffer = gtk::TextBuffer::new(None);
+    let code_view = gtk::TextView::with_buffer(&code_buffer);
+    code_view.set_monospace(true);
+    let code_scroll = gtk::ScrolledWindow::new();
+    code_scroll.set_child(Some(&code_view));
+    code_scroll.set_vexpand(true);
+    let code_apply = gtk::Button::with_label("Apply JSON");
+    code_apply.add_css_class("suggested-action");
+    let code_status = gtk::Label::new(None);
+    code_status.set_halign(gtk::Align::Start);
+    code_status.set_wrap(true);
+    {
+        let editor = editor.clone();
+        let code_buffer = code_buffer.clone();
+        let code_status = code_status.clone();
+        code_apply.connect_clicked(move |_| {
+            let text = code_buffer
+                .text(&code_buffer.start_iter(), &code_buffer.end_iter(), false)
+                .to_string();
+            match Project::from_json(&text) {
+                Ok(project) => {
+                    code_status.set_text("✓ applied");
+                    editor.commit_document(project);
+                }
+                Err(e) => code_status.set_text(&format!("✗ {e:#}")),
+            }
+        });
+    }
+    let code_page = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    code_page.append(&code_scroll);
+    code_page.append(&code_apply);
+    code_page.append(&code_status);
+
+    let left_tabs = gtk::Notebook::new();
+    left_tabs.append_page(&media_scroll, Some(&gtk::Label::new(Some("Media"))));
+    left_tabs.append_page(&code_page, Some(&gtk::Label::new(Some("Code"))));
+    left_tabs.set_size_request(260, -1);
+
+    // Right: parameters (Inspect | Script), as before.
     let inspector = gtk::Box::new(gtk::Orientation::Vertical, 6);
     inspector.set_margin_top(8);
     inspector.set_margin_start(8);
@@ -1518,16 +1695,25 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     sidebar.append(&stack);
     stack.set_vexpand(true);
 
-    let paned = gtk::Paned::new(gtk::Orientation::Horizontal);
-    paned.set_start_child(Some(&left));
-    paned.set_end_child(Some(&sidebar));
-    paned.set_resize_start_child(true);
-    paned.set_shrink_end_child(false);
-    paned.set_position(760);
+    let inner = gtk::Paned::new(gtk::Orientation::Horizontal);
+    inner.set_start_child(Some(&center));
+    inner.set_end_child(Some(&sidebar));
+    inner.set_resize_start_child(true);
+    inner.set_shrink_end_child(false);
+    inner.set_position(620);
+
+    let outer = gtk::Paned::new(gtk::Orientation::Horizontal);
+    outer.set_start_child(Some(&left_tabs));
+    outer.set_end_child(Some(&inner));
+    outer.set_resize_end_child(true);
+    outer.set_shrink_start_child(false);
+    outer.set_position(260);
+    outer.set_vexpand(true);
 
     let content = gtk::Box::new(gtk::Orientation::Vertical, 0);
     content.append(&bar);
-    content.append(&paned);
+    content.append(&outer);
+    content.append(&bottom);
 
     let window = adw::ApplicationWindow::builder()
         .application(app)
@@ -1559,8 +1745,10 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     window.present();
     start_paused(&pipeline)?;
 
-    *editor.ui.borrow_mut() = Some(Ui { picture, seek, strip, inspector });
+    *editor.ui.borrow_mut() = Some(Ui { picture, seek, strip, inspector, media_list, code_buffer });
     editor.rebuild_strip();
     editor.rebuild_inspector();
+    editor.rebuild_media();
+    editor.refresh_code();
     Ok(())
 }
