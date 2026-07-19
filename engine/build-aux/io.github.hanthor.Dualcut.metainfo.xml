@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.14.0" date="2026-07-19">
+      <description>
+        <p>Timeline ruler with live playhead + zoom slider, click-to-select clips, library thumbnail refresh, H.264/AAC decoding in the flatpak.</p>
+      </description>
+    </release>
     <release version="0.13.1" date="2026-07-19">
       <description>
         <p>Window title capitalization; web prototype removed from the tree.</p>
