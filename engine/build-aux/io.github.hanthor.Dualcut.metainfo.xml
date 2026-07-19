@@ -41,6 +41,11 @@
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
   <releases>
+    <release version="0.7.1" date="2026-07-19">
+      <description>
+        <p>Polish: per-frame Vello renderer caching (~130fps live-vector renders), keyboard shortcuts (Space/arrows/Home), clip-type colors, zero warnings, CONTEXT.md + ADRs + remote-build tooling.</p>
+      </description>
+    </release>
     <release version="0.7.0" date="2026-07-19">
       <description>
         <p>Keyframe animations, credits/badge/callout presets, Builder-style layout: bottom timeline pane, Media + Code tabs.</p>
