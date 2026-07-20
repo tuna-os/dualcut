@@ -2989,11 +2989,15 @@ fn parse_whisper_segments(json: &str) -> std::result::Result<Vec<(f64, f64, Stri
 
 /// Worker-thread half of auto-captions (#37): export the project audio to
 /// a temp wav, transcribe it with whisper.cpp, parse the segments.
+/// `word_level` (#47) requests whisper.cpp segment the transcript down to
+/// ~single words (`--max-len 1`) instead of whole phrases -- same JSON
+/// shape, so `parse_whisper_segments` needs no changes either way.
 fn run_captions_job(
     project_json: String,
     base_dir: PathBuf,
     whisper: PathBuf,
     model: String,
+    word_level: bool,
 ) -> std::result::Result<Vec<(f64, f64, String)>, String> {
     let tmp = std::env::temp_dir().join(format!("dualcut-captions-{}", std::process::id()));
     std::fs::create_dir_all(&tmp).map_err(|e| format!("temp dir: {e}"))?;
@@ -3001,16 +3005,12 @@ fn run_captions_job(
     dualcut_engine::render_project(&project_json, &base_dir, &wav.to_string_lossy(), "wav")
         .map_err(|e| format!("audio export failed: {e:#}"))?;
     let prefix = tmp.join("voice");
-    let output = std::process::Command::new(&whisper)
-        .arg("-m")
-        .arg(&model)
-        .arg("-f")
-        .arg(&wav)
-        .arg("--output-json")
-        .arg("--output-file")
-        .arg(&prefix)
-        .output()
-        .map_err(|e| format!("running {}: {e}", whisper.display()))?;
+    let mut cmd = std::process::Command::new(&whisper);
+    cmd.arg("-m").arg(&model).arg("-f").arg(&wav).arg("--output-json").arg("--output-file").arg(&prefix);
+    if word_level {
+        cmd.arg("--max-len").arg("1");
+    }
+    let output = cmd.output().map_err(|e| format!("running {}: {e}", whisper.display()))?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr);
         return Err(format!(
@@ -3091,6 +3091,12 @@ fn show_captions_dialog(editor: &Rc<Editor>) {
              to a ggml model file to use a different one."
         )),
     );
+    let word_mode = gtk::CheckButton::with_label("Word-by-word (pop-on captions)");
+    word_mode.set_tooltip_text(Some(
+        "Each word appears on its own, tightly timed to when it's spoken \
+         (TikTok/CapCut-style), instead of whole phrases at once",
+    ));
+    dialog.set_extra_child(Some(&word_mode));
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("generate", "Generate");
     dialog.set_response_appearance("generate", adw::ResponseAppearance::Suggested);
@@ -3110,8 +3116,9 @@ fn show_captions_dialog(editor: &Rc<Editor>) {
             let project_json = project_json.clone();
             let base_dir = base_dir.clone();
             let whisper = whisper.clone();
+            let word_level = word_mode.is_active();
             std::thread::spawn(move || {
-                let _ = tx.send(run_captions_job(project_json, base_dir, whisper, model));
+                let _ = tx.send(run_captions_job(project_json, base_dir, whisper, model, word_level));
             });
         }
         let this = this.clone();
