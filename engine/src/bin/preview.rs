@@ -1548,18 +1548,25 @@ impl Editor {
         list.set_selection_mode(gtk::SelectionMode::Multiple);
         // Row index -> clip id; None for group header rows.
         let mut ids: Vec<Option<String>> = Vec::new();
-        let mut groups: Vec<(String, String, Vec<(String, String)>)> = Vec::new();
+        struct ClipGroup {
+            label: String,
+            group_id: String,
+            clips: Vec<(String, String)>,
+        }
+        let mut groups: Vec<ClipGroup> = Vec::new();
         for scene in &project.scenes {
-            let clips: Vec<(String, String)> =
-                scene.layers.iter().map(|c| (c.id.clone(), c.id.clone())).collect();
-            groups.push((scene.id.clone(), scene.id.clone(), clips));
+            let clips = scene.layers.iter().map(|c| (c.id.clone(), c.id.clone())).collect();
+            groups.push(ClipGroup { label: scene.id.clone(), group_id: scene.id.clone(), clips });
         }
         for track in &project.overlays {
-            let clips: Vec<(String, String)> =
-                track.clips.iter().map(|c| (c.id.clone(), c.id.clone())).collect();
-            groups.push((format!("〜 {}", track.id), track.id.clone(), clips));
+            let clips = track.clips.iter().map(|c| (c.id.clone(), c.id.clone())).collect();
+            groups.push(ClipGroup {
+                label: format!("〜 {}", track.id),
+                group_id: track.id.clone(),
+                clips,
+            });
         }
-        for (label, group_id, clips) in &groups {
+        for ClipGroup { label, group_id, clips } in &groups {
             let has_selection = clips.iter().any(|(_, id)| Some(id) == selected.as_ref());
             if has_selection {
                 self.clips_collapsed.borrow_mut().remove(group_id);
