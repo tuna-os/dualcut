@@ -1989,7 +1989,23 @@ impl Editor {
         fx_head.set_margin_top(8);
         form.append(&fx_head);
         for (fi, effect) in clip.effects.iter().enumerate() {
-            let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+            // FlowBox instead of a plain Box (#44): wide effects (Crop, Color,
+            // ChromaKey) pack several label+spinbutton pairs, which used to
+            // force the whole right pane wider to fit one unbroken row.
+            // Wrapping bounds each row's minimum width to one pair and lets
+            // the rest flow onto additional lines instead.
+            let row = gtk::FlowBox::new();
+            row.set_selection_mode(gtk::SelectionMode::None);
+            row.set_max_children_per_line(4);
+            row.set_min_children_per_line(1);
+            row.set_row_spacing(2);
+            row.set_column_spacing(4);
+            let pair = |a: &gtk::Widget, b: &gtk::Widget| {
+                let p = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                p.append(a);
+                p.append(b);
+                p
+            };
             let commit_fx = {
                 let this = self.clone();
                 let project = project.clone();
@@ -2013,8 +2029,7 @@ impl Editor {
             match effect {
                 document::Effect::Blur { amount } => {
                     let (l, s) = fx_spin("Blur", *amount, 0.0, 50.0, 0.5);
-                    row.append(&l);
-                    row.append(&s);
+                    row.append(&pair(l.upcast_ref(), s.upcast_ref()));
                     let commit_fx = commit_fx.clone();
                     s.connect_value_changed(move |s| {
                         let v = s.value();
@@ -2028,11 +2043,10 @@ impl Editor {
                 document::Effect::ChromaKey { color, angle, noise } => {
                     let l = gtk::Label::new(Some("Key"));
                     l.add_css_class("dim-label");
-                    row.append(&l);
                     let ce = gtk::Entry::new();
                     ce.set_text(color);
                     ce.set_max_width_chars(9);
-                    row.append(&ce);
+                    row.append(&pair(l.upcast_ref(), ce.upcast_ref()));
                     {
                         let commit_fx = commit_fx.clone();
                         ce.connect_activate(move |e| {
@@ -2048,8 +2062,7 @@ impl Editor {
                         [("Angle", *angle, 1.0, 90.0), ("Noise", *noise, 0.0, 64.0)]
                     {
                         let (l, s) = fx_spin(name, val, min, max, 1.0);
-                        row.append(&l);
-                        row.append(&s);
+                        row.append(&pair(l.upcast_ref(), s.upcast_ref()));
                         let commit_fx = commit_fx.clone();
                         s.connect_value_changed(move |s| {
                             let v = s.value();
@@ -2066,8 +2079,7 @@ impl Editor {
                         [("L", *left), ("R", *right), ("T", *top), ("B", *bottom)]
                     {
                         let (l, s) = fx_spin(name, val as f64, 0.0, 4000.0, 2.0);
-                        row.append(&l);
-                        row.append(&s);
+                        row.append(&pair(l.upcast_ref(), s.upcast_ref()));
                         let commit_fx = commit_fx.clone();
                         s.connect_value_changed(move |s| {
                             let v = s.value() as i32;
@@ -2087,8 +2099,7 @@ impl Editor {
                 document::Effect::Eq { low, mid, high } => {
                     for (name, val) in [("Low", *low), ("Mid", *mid), ("High", *high)] {
                         let (l, s) = fx_spin(name, val, -24.0, 12.0, 0.5);
-                        row.append(&l);
-                        row.append(&s);
+                        row.append(&pair(l.upcast_ref(), s.upcast_ref()));
                         let commit_fx = commit_fx.clone();
                         s.connect_value_changed(move |s| {
                             let v = s.value();
@@ -2106,8 +2117,7 @@ impl Editor {
                 }
                 document::Effect::Denoise { level } => {
                     let (l, s) = fx_spin("Level", *level as f64, 0.0, 3.0, 1.0);
-                    row.append(&l);
-                    row.append(&s);
+                    row.append(&pair(l.upcast_ref(), s.upcast_ref()));
                     let commit_fx = commit_fx.clone();
                     s.connect_value_changed(move |s| {
                         let v = s.value() as u32;
@@ -2124,8 +2134,7 @@ impl Editor {
                         ("Ratio", *ratio, 1.0, 4.0, 0.1),
                     ] {
                         let (l, s) = fx_spin(name, val, min, max, step);
-                        row.append(&l);
-                        row.append(&s);
+                        row.append(&pair(l.upcast_ref(), s.upcast_ref()));
                         let commit_fx = commit_fx.clone();
                         s.connect_value_changed(move |s| {
                             let v = s.value();
@@ -2145,8 +2154,7 @@ impl Editor {
                         ("Hue", *hue, -1.0, 1.0),
                     ] {
                         let (l, s) = fx_spin(name, val, min, max, 0.05);
-                        row.append(&l);
-                        row.append(&s);
+                        row.append(&pair(l.upcast_ref(), s.upcast_ref()));
                         let commit_fx = commit_fx.clone();
                         s.connect_value_changed(move |s| {
                             let v = s.value();
@@ -3719,7 +3727,11 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     inner.set_start_child(Some(&center));
     inner.set_end_child(Some(&sidebar));
     inner.set_resize_start_child(true);
-    inner.set_shrink_end_child(false);
+    // Allow the sidebar to be shrunk rather than forcing the window wider
+    // whenever a wide effect-param row's minimum size grows (#44); effect
+    // rows themselves wrap via FlowBox below, so this is now a rare
+    // fallback rather than the everyday case.
+    inner.set_shrink_end_child(true);
     inner.set_position(620);
 
     let outer = gtk::Paned::new(gtk::Orientation::Horizontal);
@@ -4008,7 +4020,17 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                 steps.push(("clip-inspector", Box::new(move || {
                     tabs.set_visible_child_name("clips");
                     editor.state.borrow_mut().selected = Some("media-ball".into());
-                    editor.rebuild_inspector();
+                    // Stack a couple of wide effects (Crop, Color) so this
+                    // shot doubles as a regression check for #44 -- the
+                    // right pane must wrap them, not grow to fit.
+                    let mut project = editor.state.borrow().project.clone().unwrap();
+                    if let Some(c) = find_clip_mut(&mut project, "media-ball") {
+                        c.effects.push(document::Effect::Crop { left: 0, right: 0, top: 0, bottom: 0 });
+                        c.effects.push(document::Effect::Color {
+                            brightness: 0.0, contrast: 1.0, saturation: 1.0, hue: 0.0,
+                        });
+                    }
+                    editor.commit_document(project);
                 })));
             }
             {
