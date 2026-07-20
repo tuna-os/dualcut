@@ -269,10 +269,22 @@ pub fn render_project_with_progress(
         std::fs::create_dir_all(parent).ok();
     }
     let out_abs = std::path::absolute(out)?;
-    pipeline.set_render_settings(&format!("file://{}", out_abs.display()), &encoding_profile(profile)?)?;
+    // Render to a sibling .part file and rename on success (#43): a
+    // failed or interrupted export must never leave a broken/empty file
+    // sitting at the name the user asked for -- same pattern as
+    // thumbs::proxy_mp4's cache writes.
+    let part = out_abs.with_extension(format!(
+        "{}.part",
+        out_abs.extension().and_then(|e| e.to_str()).unwrap_or("out")
+    ));
+    let _ = std::fs::remove_file(&part);
+    pipeline.set_render_settings(&format!("file://{}", part.display()), &encoding_profile(profile)?)?;
     pipeline.set_mode(ges::PipelineFlags::RENDER)?;
 
     let bus = pipeline.bus().context("pipeline has no bus")?;
+    let cleanup_part = || {
+        let _ = std::fs::remove_file(&part);
+    };
     pipeline.set_state(gst::State::Playing).context("setting pipeline to Playing")?;
     loop {
         match bus.timed_pop(gst::ClockTime::from_mseconds(500)) {
@@ -282,6 +294,7 @@ pub fn render_project_with_progress(
                     MessageView::Eos(..) => break,
                     MessageView::Error(err) => {
                         let _ = pipeline.set_state(gst::State::Null);
+                        cleanup_part();
                         anyhow::bail!(
                             "pipeline error from {:?}: {} ({:?})",
                             err.src().map(|s| s.path_string()),
@@ -301,6 +314,10 @@ pub fn render_project_with_progress(
     }
     progress(1.0);
     pipeline.set_state(gst::State::Null)?;
+    if let Err(e) = std::fs::rename(&part, &out_abs) {
+        cleanup_part();
+        anyhow::bail!("render finished but couldn't move into place: {e}");
+    }
     Ok(compiled.warnings)
 }
 

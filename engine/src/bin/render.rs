@@ -136,7 +136,15 @@ fn main() -> Result<()> {
     pipeline.set_timeline(&timeline).context("attaching timeline")?;
 
     let out_abs = std::path::absolute(&out)?;
-    let uri = format!("file://{}", out_abs.display());
+    // Render to a sibling .part file and rename on success (#43): a
+    // failed or interrupted export must never leave a broken/empty file
+    // at the name the user asked for.
+    let part = out_abs.with_extension(format!(
+        "{}.part",
+        out_abs.extension().and_then(|e| e.to_str()).unwrap_or("out")
+    ));
+    let _ = std::fs::remove_file(&part);
+    let uri = format!("file://{}", part.display());
     pipeline
         .set_render_settings(&uri, &encoding_profile(profile_override.as_deref().unwrap_or(&out))?)
         .context("setting render settings")?;
@@ -146,7 +154,14 @@ fn main() -> Result<()> {
 
     println!("rendering -> {}", out_abs.display());
     let start = std::time::Instant::now();
-    run_to_eos(&pipeline)?;
+    if let Err(e) = run_to_eos(&pipeline) {
+        let _ = std::fs::remove_file(&part);
+        return Err(e);
+    }
+    if let Err(e) = std::fs::rename(&part, &out_abs) {
+        let _ = std::fs::remove_file(&part);
+        anyhow::bail!("render finished but couldn't move into place: {e}");
+    }
     println!("done in {:.1?}", start.elapsed());
     Ok(())
 }
