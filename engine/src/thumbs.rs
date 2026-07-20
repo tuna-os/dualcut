@@ -310,3 +310,184 @@ pub fn template_png(
     img.save(&out)?;
     Ok(out)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Once;
+
+    fn init_once() {
+        static ONCE: Once = Once::new();
+        ONCE.call_once(|| crate::init().expect("gst/ges init"));
+    }
+
+    /// A small synthetic video+audio file, built fresh in the temp dir
+    /// rather than checked into the repo -- avoids binary bloat and
+    /// avoids depending on `ball.mp4`'s known-problematic codec profile
+    /// (#45) for tests that just need *some* decodable media.
+    fn synth_media(dir: &Path) -> PathBuf {
+        let path = dir.join("synth.webm");
+        if path.exists() {
+            return path;
+        }
+        std::fs::create_dir_all(dir).unwrap();
+        let desc = format!(
+            "videotestsrc pattern=smpte num-buffers=50 ! \
+             video/x-raw,width=320,height=240,framerate=25/1 ! vp8enc ! queue ! mux. \
+             audiotestsrc num-buffers=50 ! audio/x-raw,rate=44100 ! vorbisenc ! queue ! mux. \
+             webmmux name=mux ! filesink location=\"{}\"",
+            path.display()
+        );
+        let pipeline = gst::parse::launch(&desc).unwrap().downcast::<gst::Pipeline>().unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        let bus = pipeline.bus().unwrap();
+        for msg in bus.iter_timed(gst::ClockTime::from_seconds(30)) {
+            use gst::MessageView;
+            match msg.view() {
+                MessageView::Eos(_) => break,
+                MessageView::Error(e) => panic!("synth media build failed: {}", e.error()),
+                _ => {}
+            }
+        }
+        let _ = pipeline.set_state(gst::State::Null);
+        path
+    }
+
+    fn tmp_dir(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("dualcut-thumbs-test-{name}"));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn file_uri(path: &Path) -> String {
+        format!("file://{}", path.canonicalize().unwrap().display())
+    }
+
+    #[test]
+    fn fxhash_is_deterministic_and_distinguishes_inputs() {
+        assert_eq!(fxhash("same"), fxhash("same"));
+        assert_ne!(fxhash("a"), fxhash("b"));
+        assert_ne!(fxhash(""), fxhash("x"));
+    }
+
+    #[test]
+    fn proxy_path_is_deterministic_by_uri() {
+        let cache = std::path::Path::new("/cache");
+        let a = proxy_path(cache, "file:///a.mp4");
+        let b = proxy_path(cache, "file:///a.mp4");
+        let c = proxy_path(cache, "file:///b.mp4");
+        assert_eq!(a, b);
+        assert_ne!(a, c);
+        assert!(a.extension().is_some_and(|e| e == "mkv"));
+    }
+
+    #[test]
+    fn thumbnail_png_produces_a_correctly_sized_nonblank_image() {
+        init_once();
+        let dir = tmp_dir("thumbnail");
+        let media = synth_media(&dir);
+        let uri = file_uri(&media);
+        let cache = dir.join("cache");
+        let out = thumbnail_png(&cache, &uri).expect("thumbnail generation");
+        let img = image::open(&out).expect("valid png").to_rgb8();
+        assert_eq!((img.width(), img.height()), (W as u32, H as u32));
+        // An SMPTE test pattern is not a single flat color -- confirm real
+        // frame content landed, not a blank/black buffer.
+        let distinct_colors: std::collections::HashSet<_> = img.pixels().map(|p| p.0).collect();
+        assert!(distinct_colors.len() > 1, "thumbnail looks blank (one color only)");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thumbnail_png_is_cached_on_second_call() {
+        init_once();
+        let dir = tmp_dir("thumbnail-cache");
+        let media = synth_media(&dir);
+        let uri = file_uri(&media);
+        let cache = dir.join("cache");
+        let first = thumbnail_png(&cache, &uri).unwrap();
+        let mtime1 = std::fs::metadata(&first).unwrap().modified().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let second = thumbnail_png(&cache, &uri).unwrap();
+        let mtime2 = std::fs::metadata(&second).unwrap().modified().unwrap();
+        assert_eq!(first, second);
+        assert_eq!(mtime1, mtime2, "second call should reuse the cached file");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn proxy_mp4_transcodes_a_video_with_audio() {
+        init_once();
+        let dir = tmp_dir("proxy");
+        let media = synth_media(&dir);
+        let uri = file_uri(&media);
+        let cache = dir.join("cache");
+        let out = proxy_mp4(&cache, &uri).expect("proxy transcode");
+        assert!(out.exists());
+        assert!(std::fs::metadata(&out).unwrap().len() > 0);
+        assert_eq!(out, proxy_path(&cache, &uri));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn decode_mono_pcm_returns_nonempty_samples_at_the_fixed_rate() {
+        init_once();
+        let dir = tmp_dir("pcm");
+        let media = synth_media(&dir);
+        let uri = file_uri(&media);
+        let (samples, rate) = decode_mono_pcm(&uri).expect("pcm decode");
+        assert_eq!(rate, PCM_SAMPLE_RATE);
+        assert!(!samples.is_empty());
+        // audiotestsrc's default sine wave should have real amplitude, not
+        // silence.
+        let peak = samples.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.01, "expected nonzero audio amplitude, got peak={peak}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn waveform_png_produces_a_correctly_sized_image_with_visible_peaks() {
+        init_once();
+        let dir = tmp_dir("waveform");
+        let media = synth_media(&dir);
+        let uri = file_uri(&media);
+        let cache = dir.join("cache");
+        let out = waveform_png(&cache, &uri).expect("waveform render");
+        let img = image::open(&out).expect("valid png").to_rgba8();
+        assert_eq!((img.width(), img.height()), (WF_W, WF_H));
+        // Some pixels should carry the waveform's peak color (0x5d, 0xd3,
+        // 0x9e); a silent/flat input would leave the image empty.
+        let has_waveform_color =
+            img.pixels().any(|p| p[0] == 0x5d && p[1] == 0xd3 && p[2] == 0x9e);
+        assert!(has_waveform_color, "expected visible waveform pixels");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn template_png_renders_a_frame_for_a_simple_def() {
+        init_once();
+        let dir = tmp_dir("template");
+        let mut project = crate::templates::new_project("tpl-test");
+        project.defs.insert(
+            "solid".into(),
+            crate::document::CompDef {
+                params: Vec::new(),
+                layers: vec![crate::document::Clip {
+                    id: "bg".into(),
+                    start: 0.0,
+                    duration: 1.0,
+                    element: crate::document::Element::Test {},
+                    transform: Default::default(),
+                    animations: Vec::new(),
+                    effects: Vec::new(),
+                }],
+            },
+        );
+        let cache = dir.join("cache");
+        let out = template_png(&cache, &project, "solid", &dir).expect("template render");
+        let img = image::open(&out).expect("valid png");
+        assert_eq!((img.width(), img.height()), (320, 180));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
