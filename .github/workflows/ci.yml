@@ -38,6 +38,7 @@ jobs:
             gstreamer1-plugins-base-devel gst-editing-services-devel \
             gstreamer1-plugins-good gstreamer1-plugins-bad-free \
             gstreamer1-plugins-base-tools gstreamer1-plugins-good-extras \
+            gstreamer1-plugin-libav \
             mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
           git config --global --add safe.directory "$(pwd)"
 
