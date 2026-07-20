@@ -388,6 +388,18 @@ pub enum Easing {
     EaseInOut,
 }
 
+/// Apply an easing curve to a 0..1 progress fraction.
+pub fn ease(easing: Easing, p: f64) -> f64 {
+    match easing {
+        Easing::Linear => p,
+        Easing::EaseIn => p * p * p,
+        Easing::EaseOut => 1.0 - (1.0 - p).powi(3),
+        Easing::EaseInOut => {
+            if p < 0.5 { 4.0 * p * p * p } else { 1.0 - (-2.0 * p + 2.0).powi(3) / 2.0 }
+        }
+    }
+}
+
 impl Project {
     pub fn from_json(json: &str) -> Result<Self> {
         let project: Project = serde_json::from_str(json)?;
@@ -503,11 +515,22 @@ impl Clip {
             && !(0.1..=10.0).contains(rate) {
                 bail!("clip {:?}: rate must be 0.1-10", self.id);
             }
-        if self.animations.iter().any(|a| a.property == AnimProperty::Rate) {
-            bail!(
-                "clip {:?}: keyframed rate animation is not yet supported                  (GES rate-property live-binding is unsafe); use a constant rate",
-                self.id
-            );
+        for anim in self.animations.iter().filter(|a| a.property == AnimProperty::Rate) {
+            // A plain tween (from/to) has no natural segment boundaries
+            // for expand_rate_ramp (#40) to sample from -- only keyframed
+            // rate curves are supported; tween-style throws here as
+            // before, with a clearer pointer at the actual gap.
+            if anim.keyframes.is_empty() {
+                bail!(
+                    "clip {:?}: rate animation needs keyframes (a plain tween has no segment \
+                     boundaries to expand into static-rate clips); use a constant rate or \
+                     keyframes",
+                    self.id
+                );
+            }
+            if anim.keyframes.iter().any(|k| !(0.1..=10.0).contains(&k.value)) {
+                bail!("clip {:?}: rate keyframe values must be 0.1-10", self.id);
+            }
         }
         for effect in &self.effects {
             match effect {
@@ -775,6 +798,61 @@ pub fn remove_silence(project: &mut Project, id: &str, silent_ranges: &[(f64, f6
     Ok(removed)
 }
 
+/// Expand a clip with a keyframed rate animation into N sub-clips, each
+/// with its own *static* rate sampled at that segment's midpoint (#40).
+/// GES auto-registers pitch/videorate rate properties at the class level
+/// and synchronously recomputes the clip's timeline-to-media mapping
+/// whenever one changes via edit APIs that assert the calling thread owns
+/// the timeline -- but a live GstController binding (the same mechanism
+/// used for opacity/position animation) fires from the streaming thread,
+/// not the app thread, so a keyframed *live* rate binding reliably hits
+/// that threading assertion. This sidesteps it entirely: the document
+/// keeps one clip with a rate curve, and mapping::compile() calls this to
+/// turn it into ordinary static-rate clips before GES ever sees a rate
+/// animation. Segment boundaries are the keyframes themselves; each
+/// segment's media offset advances by the *previous* segments' actual
+/// media consumption (duration x sampled rate), not just clip-time
+/// duration. Returns `None` if `clip` has no keyframed Rate animation.
+pub fn expand_rate_ramp(clip: &Clip) -> Option<Vec<Clip>> {
+    let anim = clip.animations.iter().find(|a| a.property == AnimProperty::Rate)?;
+    if anim.keyframes.len() < 2 {
+        return None;
+    }
+    let base_offset = match &clip.element {
+        Element::Video { offset, .. } | Element::Audio { offset, .. } => *offset,
+        _ => return None,
+    };
+    let other_anims: Vec<Anim> =
+        clip.animations.iter().filter(|a| a.property != AnimProperty::Rate).cloned().collect();
+    let mut segments = Vec::new();
+    let mut media_offset = base_offset;
+    for w in anim.keyframes.windows(2) {
+        let (k0, k1) = (&w[0], &w[1]);
+        let seg_dur = k1.t - k0.t;
+        if seg_dur <= 0.0 {
+            continue;
+        }
+        let mid = (k0.t + k1.t) / 2.0;
+        let p = ((mid - k0.t) / seg_dur).clamp(0.0, 1.0);
+        let rate = k0.value + (k1.value - k0.value) * ease(k1.easing, p);
+        let mut seg = clip.clone();
+        seg.id = format!("{}-ramp{}", clip.id, segments.len());
+        seg.start = clip.start + k0.t;
+        seg.duration = seg_dur;
+        seg.animations = other_anims.clone();
+        match &mut seg.element {
+            Element::Video { rate: r, offset: o, .. } | Element::Audio { rate: r, offset: o, .. } => {
+                *r = rate;
+                *o = media_offset;
+            }
+            _ => unreachable!("checked above"),
+        }
+        media_offset += seg_dur * rate;
+        segments.push(seg);
+    }
+    Some(segments)
+}
+
 /// Split a clip at an absolute timeline time (#29). The original keeps
 /// the left side; a new clip (returned id) takes the right, with media
 /// offsets advanced and animations divided between the halves.
@@ -836,15 +914,7 @@ pub fn split_clip(project: &mut Project, id: &str, abs_time: f64) -> Result<Stri
             return a.to;
         }
         let p = ((t - a.start) / (a.end - a.start)).clamp(0.0, 1.0);
-        let e = match a.easing {
-            Easing::Linear => p,
-            Easing::EaseIn => p * p * p,
-            Easing::EaseOut => 1.0 - (1.0 - p).powi(3),
-            Easing::EaseInOut => {
-                if p < 0.5 { 4.0 * p * p * p } else { 1.0 - (-2.0 * p + 2.0).powi(3) / 2.0 }
-            }
-        };
-        a.from + (a.to - a.from) * e
+        a.from + (a.to - a.from) * ease(a.easing, p)
     };
     let left_anims: Vec<Anim> = clip
         .animations
@@ -1151,6 +1221,122 @@ mod tests {
         let n = remove_silence(&mut p, "media-ball", &[(10.0, 11.0)]).expect("no-op");
         assert_eq!(n, 0);
         assert_eq!(p.duration(), before);
+    }
+
+    fn rate_ramp_clip(keyframes: Vec<Keyframe>) -> Clip {
+        Clip {
+            id: "ramp".into(),
+            start: 10.0,
+            duration: 0.0,
+            element: Element::Video {
+                src: "assets/ball.mp4".into(),
+                offset: 5.0,
+                volume: 1.0,
+                rate: 1.0,
+            },
+            transform: Default::default(),
+            animations: vec![Anim {
+                property: AnimProperty::Rate,
+                from: 0.0,
+                to: 0.0,
+                start: 0.0,
+                end: 0.0,
+                easing: Easing::Linear,
+                keyframes,
+            }],
+            effects: vec![],
+        }
+    }
+
+    #[test]
+    fn expand_rate_ramp_none_without_a_rate_animation() {
+        let mut c = rate_ramp_clip(vec![]);
+        c.animations.clear();
+        assert!(expand_rate_ramp(&c).is_none());
+    }
+
+    #[test]
+    fn expand_rate_ramp_none_with_fewer_than_two_keyframes() {
+        let c = rate_ramp_clip(vec![Keyframe { t: 0.0, value: 2.0, easing: Easing::Linear }]);
+        assert!(expand_rate_ramp(&c).is_none());
+    }
+
+    #[test]
+    fn expand_rate_ramp_two_keyframes_one_segment() {
+        // Constant 2x across [0, 4) -- media consumed = 4 * 2 = 8s.
+        let c = rate_ramp_clip(vec![
+            Keyframe { t: 0.0, value: 2.0, easing: Easing::Linear },
+            Keyframe { t: 4.0, value: 2.0, easing: Easing::Linear },
+        ]);
+        let segs = expand_rate_ramp(&c).expect("expands");
+        assert_eq!(segs.len(), 1);
+        assert_eq!(segs[0].id, "ramp-ramp0");
+        assert_eq!(segs[0].start, 10.0); // clip.start + k0.t
+        assert_eq!(segs[0].duration, 4.0);
+        assert!(segs[0].animations.is_empty()); // Rate anim consumed, not carried over
+        match &segs[0].element {
+            Element::Video { rate, offset, .. } => {
+                assert_eq!(*rate, 2.0);
+                assert_eq!(*offset, 5.0); // base offset, first segment
+            }
+            _ => panic!("expected video"),
+        }
+    }
+
+    #[test]
+    fn expand_rate_ramp_accumulates_media_offset_across_segments() {
+        // [0,2) at 1x (2s media), [2,4) at 3x (6s media) -- second
+        // segment's offset must advance by the first's actual media
+        // consumption, not just clip-time duration.
+        let c = rate_ramp_clip(vec![
+            Keyframe { t: 0.0, value: 1.0, easing: Easing::Linear },
+            Keyframe { t: 2.0, value: 1.0, easing: Easing::Linear },
+            Keyframe { t: 4.0, value: 3.0, easing: Easing::Linear },
+        ]);
+        let segs = expand_rate_ramp(&c).expect("expands");
+        assert_eq!(segs.len(), 2);
+        let offsets: Vec<f64> = segs
+            .iter()
+            .map(|s| match &s.element {
+                Element::Video { offset, .. } => *offset,
+                _ => panic!("expected video"),
+            })
+            .collect();
+        assert_eq!(offsets[0], 5.0); // base offset
+        assert_eq!(offsets[1], 5.0 + 2.0 * 1.0); // + first segment's media span
+    }
+
+    #[test]
+    fn rate_tween_without_keyframes_still_rejected() {
+        let mut c = rate_ramp_clip(vec![]);
+        c.animations = vec![Anim {
+            property: AnimProperty::Rate,
+            from: 1.0,
+            to: 2.0,
+            start: 0.0,
+            end: 2.0,
+            easing: Easing::Linear,
+            keyframes: vec![],
+        }];
+        assert!(c.validate(&BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn rate_keyframes_out_of_range_rejected() {
+        let c = rate_ramp_clip(vec![
+            Keyframe { t: 0.0, value: 0.05, easing: Easing::Linear },
+            Keyframe { t: 2.0, value: 2.0, easing: Easing::Linear },
+        ]);
+        assert!(c.validate(&BTreeMap::new()).is_err());
+    }
+
+    #[test]
+    fn valid_rate_keyframes_pass_clip_validation() {
+        let c = rate_ramp_clip(vec![
+            Keyframe { t: 0.0, value: 1.0, easing: Easing::Linear },
+            Keyframe { t: 2.0, value: 2.0, easing: Easing::Linear },
+        ]);
+        assert!(c.validate(&BTreeMap::new()).is_ok());
     }
 
     #[test]

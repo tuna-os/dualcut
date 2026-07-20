@@ -159,6 +159,16 @@ fn add_clip(
     base_dir: &std::path::Path,
     warnings: &mut Vec<String>,
 ) -> Result<()> {
+    // Keyframed rate ramp (#40): expand into static-rate sub-clips before
+    // GES ever sees a rate animation -- see expand_rate_ramp's doc comment
+    // for why a live rate binding isn't safe.
+    if let Some(segments) = crate::document::expand_rate_ramp(clip) {
+        for seg in &segments {
+            add_clip(project, slot, seg, offset, base_dir, warnings)
+                .with_context(|| format!("rate ramp segment {:?}", seg.id))?;
+        }
+        return Ok(());
+    }
     let layer = &slot[0];
     let start = secs(offset + clip.start);
     let duration = secs(if clip.duration > 0.0 { clip.duration } else { 1.0 });
