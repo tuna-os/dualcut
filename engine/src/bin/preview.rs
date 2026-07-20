@@ -2418,7 +2418,15 @@ impl Editor {
             row.append(&rm);
             form.append(&row);
         }
-        let fx_add = gtk::Box::new(gtk::Orientation::Horizontal, 6);
+        // FlowBox, not a plain Box (#55, same fix as #44's effect param
+        // rows): 7 buttons in one unbroken row forced the sidebar wider
+        // to fit them all; wrapping bounds the row's minimum width.
+        let fx_add = gtk::FlowBox::new();
+        fx_add.set_selection_mode(gtk::SelectionMode::None);
+        fx_add.set_max_children_per_line(3);
+        fx_add.set_min_children_per_line(1);
+        fx_add.set_row_spacing(4);
+        fx_add.set_column_spacing(4);
         for (label, make) in [
             ("+ Blur", document::Effect::Blur { amount: 4.0 }),
             ("+ Color", document::Effect::Color {
