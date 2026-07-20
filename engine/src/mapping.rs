@@ -169,6 +169,40 @@ fn add_clip(
         }
         return Ok(());
     }
+    // Freeform shape mask (#41): bake into a real alpha-channel video and
+    // recurse as an ordinary Video clip -- see bake_masked_clip's doc
+    // comment for why baking real alpha (not a separate opaque cutout
+    // layer, and not a GESEffect bin) is the only approach that actually
+    // reveals lower layers through the shape.
+    if let Some((shape, feather, invert)) = clip.effects.iter().find_map(|e| match e {
+        crate::document::Effect::Mask { shape, feather, invert } => {
+            Some((*shape, *feather, *invert))
+        }
+        _ => None,
+    }) {
+        return match bake_masked_clip(project, base_dir, clip, shape, feather, invert) {
+            Ok(baked_src) => {
+                let mut baked = clip.clone();
+                // The bake mirrors the source's full timeline 1:1 (see
+                // bake_masked_clip), so a Video clip keeps its original
+                // inpoint; Test has no source file to mirror, so the bake
+                // covers exactly this clip's own span starting at 0.
+                let (baked_offset, volume) = match &clip.element {
+                    Element::Video { offset, volume, .. } => (*offset, *volume),
+                    _ => (0.0, 1.0),
+                };
+                baked.element =
+                    Element::Video { src: baked_src, offset: baked_offset, volume, rate: 1.0 };
+                baked.effects.retain(|e| !matches!(e, crate::document::Effect::Mask { .. }));
+                add_clip(project, slot, &baked, offset, base_dir, warnings)
+                    .with_context(|| format!("masked clip {:?}", clip.id))
+            }
+            Err(e) => {
+                warnings.push(format!("clip {:?}: mask effect: {e}", clip.id));
+                Ok(())
+            }
+        };
+    }
     let layer = &slot[0];
     let start = secs(offset + clip.start);
     let duration = secs(if clip.duration > 0.0 { clip.duration } else { 1.0 });
@@ -332,6 +366,139 @@ fn add_clip(
         apply_effects(&ges_clip, clip, warnings);
     }
     Ok(())
+}
+
+/// Bake a `Mask` effect's clip into a real alpha-channel video (#41),
+/// combining the source with the rasterized shape via `alphacombine` and
+/// encoding to FFV1 (lossless, alpha-capable) in Matroska -- confirmed by
+/// direct testing that GES layer compositing correctly reveals a lower
+/// layer through a clip's own per-pixel alpha, and that FFV1/A420 round-
+/// trips real alpha through GStreamer's decoder chain (earlier attempts
+/// with qtrle-in-mov failed only because that specific muxer here doesn't
+/// declare `video/x-rle` in its sink caps -- an environment gap, not a
+/// GES-alpha-compositing gap). A prior design tried a separate opaque
+/// "cutout" clip on a layer above instead; that only ever paints a solid
+/// color over *everything* below it (including other layers), which does
+/// not match "reveal the layer below" semantics -- baking real alpha into
+/// the clip itself is the only way to get that with layer compositing.
+///
+/// Cached by (source identity, offset, duration, shape/feather/invert,
+/// frame size); returns the baked file's local path. Scoped to `Video`
+/// and `Test` element types for v1 -- the two directly verified end to
+/// end; other element types return an error so the caller can warn.
+#[cfg(feature = "vector")]
+fn bake_masked_clip(
+    project: &Project,
+    base_dir: &std::path::Path,
+    clip: &Clip,
+    shape: crate::document::ShapeKind,
+    feather: f64,
+    invert: bool,
+) -> Result<String> {
+    use std::hash::{Hash, Hasher};
+
+    let w = (project.meta.width as u32).max(2) & !1;
+    let h = (project.meta.height as u32).max(2) & !1;
+    let fps = project.meta.fps.max(1);
+    let cache = base_dir.join(".dualcut-cache");
+    std::fs::create_dir_all(&cache)?;
+    let duration = if clip.duration > 0.0 { clip.duration } else { 1.0 };
+
+    // The luma-as-alpha trick (`alphacombine`'s ac.alpha branch) needs a
+    // *white*-filled shape: unpainted (alpha=0) pixels are (0,0,0,0), so
+    // an RGBA->GRAY8 conversion naturally yields a white-inside/black-
+    // outside luma matte with no separate alpha-plane extraction needed.
+    // `invert` swaps which side is white the same way it swaps the
+    // painted/unpainted regions for the non-mask shape raster.
+    let mask_png = crate::vector::shape_png_maybe_inverted(
+        &cache, shape, "#ffffff", w, h, feather, invert,
+    )
+    .context("rendering mask shape")?;
+    let mask_png = mask_png.canonicalize().context("resolving mask png path")?;
+
+    // Bake the *whole* source once, not just the clip's own span: seeking
+    // one branch of a running alphacombine bin (source vs. the static
+    // imagefreeze alpha branch) desyncs the two and the combiner never
+    // produces output (confirmed: an isolated source-only seek succeeds,
+    // but the combined graph either fails the aggregate seek query or
+    // stalls to an empty file). Baking the full file, uncut, sidesteps
+    // that entirely -- same "slow but cached and correct" tradeoff
+    // `thumbs::proxy_mp4` already makes, and the resulting clip keeps
+    // using its *original* offset/duration exactly like an unmasked one,
+    // since the baked file mirrors the source's own timeline 1:1. `Test`
+    // has no reusable source file, so it bakes exactly its own duration
+    // and always starts at offset 0.
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let source_desc = match &clip.element {
+        Element::Video { src, .. } => {
+            let uri = to_uri(src, base_dir)?;
+            uri.hash(&mut hasher);
+            format!("uridecodebin uri=\"{uri}\" name=d")
+        }
+        Element::Test {} => {
+            "test".hash(&mut hasher);
+            duration.to_bits().hash(&mut hasher);
+            let n = (duration * fps as f64).ceil() as u64;
+            format!(
+                "videotestsrc pattern=smpte num-buffers={n} ! \
+                 video/x-raw,width={w},height={h},framerate={fps}/1 ! identity name=d"
+            )
+        }
+        _ => bail!("mask effect is only supported on video and test clips"),
+    };
+    (format!("{shape:?}"), feather.to_bits(), invert, w, h, fps).hash(&mut hasher);
+    let key = hasher.finish();
+
+    let file = cache.join(format!("mask-bake-{key:016x}.mkv"));
+    if !file.exists() {
+        let part = cache.join(format!("mask-bake-{key:016x}.mkv.part"));
+        let _ = std::fs::remove_file(&part);
+
+        let desc = format!(
+            "{source_desc} d. ! queue ! videoconvert ! videoscale ! \
+             video/x-raw,format=I420,width={w},height={h},colorimetry=bt601 ! ac.sink \
+             filesrc location=\"{mask}\" ! pngdec ! imagefreeze ! videoconvert ! \
+             video/x-raw,format=GRAY8,width={w},height={h},colorimetry=bt601 ! ac.alpha \
+             alphacombine name=ac ! videoconvert ! video/x-raw,format=A420 ! avenc_ffv1 ! \
+             matroskamux ! filesink location=\"{part}\"",
+            mask = mask_png.display(),
+            part = part.display(),
+        );
+        let pipeline = gst::parse::launch(&desc)
+            .context("building mask bake pipeline")?
+            .downcast::<gst::Pipeline>()
+            .map_err(|_| anyhow::anyhow!("mask bake pipeline is not a Pipeline"))?;
+        pipeline.set_state(gst::State::Playing).context("playing mask bake")?;
+        let bus = pipeline.bus().context("mask bake pipeline has no bus")?;
+        let mut result = Ok(());
+        for msg in bus.iter_timed(gst::ClockTime::from_seconds(300)) {
+            use gst::MessageView;
+            match msg.view() {
+                MessageView::Eos(_) => break,
+                MessageView::Error(e) => {
+                    result = Err(anyhow::anyhow!("mask bake failed: {}", e.error()));
+                    break;
+                }
+                _ => {}
+            }
+        }
+        let _ = pipeline.set_state(gst::State::Null);
+        result?;
+        std::fs::rename(&part, &file)?;
+    }
+    Ok(file.canonicalize().context("resolving mask bake path")?.display().to_string())
+}
+
+#[cfg(not(feature = "vector"))]
+fn bake_masked_clip(
+    _project: &Project,
+    _base_dir: &std::path::Path,
+    _clip: &Clip,
+    _shape: crate::document::ShapeKind,
+    _feather: f64,
+    _invert: bool,
+) -> Result<String> {
+    bail!("mask effect needs the \"vector\" feature")
 }
 
 fn apply_transform_and_animations(
@@ -514,6 +681,11 @@ fn find_by_factory(bin: &gst::Bin, factory: &str) -> Option<gst::Element> {
 fn apply_effects(ges_clip: &ges::Clip, clip: &Clip, warnings: &mut Vec<String>) {
     for effect in &clip.effects {
         let desc = match effect {
+            // Handled separately at the top of add_clip via
+            // bake_masked_clip -- a real alpha-baked clip, not a
+            // GESEffect bin (never reaches here; effects are stripped
+            // from the recursive baked-clip call).
+            crate::document::Effect::Mask { .. } => continue,
             crate::document::Effect::Blur { amount } => format!("gaussianblur sigma={amount}"),
             crate::document::Effect::ChromaKey { color, angle, noise } => {
                 let argb = crate::document::parse_color(color);

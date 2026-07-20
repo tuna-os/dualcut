@@ -203,6 +203,19 @@ pub enum Effect {
         #[serde(default)]
         hue: f64,
     },
+    /// Freeform shape mask: the clip is only visible inside `shape`
+    /// (rendered full-frame, same shape catalog as `shape` clips). Needs
+    /// the `vector` feature; skipped with a warning otherwise (#41).
+    Mask {
+        shape: ShapeKind,
+        /// Gaussian blur sigma applied to the mask edge (0-50) for a
+        /// soft/feathered cutoff instead of a hard edge.
+        #[serde(default)]
+        feather: f64,
+        /// Show outside the shape instead of inside it.
+        #[serde(default)]
+        invert: bool,
+    },
 }
 
 fn default_one() -> f64 {
@@ -574,6 +587,11 @@ impl Clip {
                             "clip {:?}: color ranges are brightness/hue -1..1, contrast/saturation 0..2",
                             self.id
                         );
+                    }
+                }
+                Effect::Mask { feather, .. } => {
+                    if !(0.0..=50.0).contains(feather) {
+                        bail!("clip {:?}: mask feather must be 0-50", self.id);
                     }
                 }
             }

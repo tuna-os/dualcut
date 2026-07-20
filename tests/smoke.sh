@@ -86,6 +86,64 @@ assert g < 150 or b > 100, f"keyed area still green: {(r,g,b)}"
 PYEOF
 check "chromakey keys out green" $?
 
+# ---- 3b. freeform mask shows fg inside the shape, bg outside ----------
+python3 - "$WORK" << 'PYEOF'
+import json, sys
+w = sys.argv[1]
+p = {"meta": {"title": "mask", "width": 320, "height": 180, "fps": 30},
+  "defs": {}, "overlays": [],
+  "scenes": [{"id": "s", "duration": 1, "layers": [
+    {"id": "fg", "start": 0, "duration": 0, "type": "test",
+     "effects": [{"type": "mask", "shape": "circle", "feather": 0}]},
+    {"id": "bg", "start": 0, "duration": 0, "type": "shape", "shape": "rect", "fill": "#0000ff",
+     "transform": {"x":0,"y":0,"width":320,"height":180}}]}]}
+json.dump(p, open(f"{w}/mask.json", "w"))
+PYEOF
+"$BIN" "$WORK/mask.json" "$WORK/mask.webm" webm > /dev/null 2>&1
+check "mask render" $?
+gst-launch-1.0 -q filesrc location="$WORK/mask.webm" ! decodebin ! videoconvert ! videorate ! \
+  'video/x-raw,framerate=1/1' ! pngenc snapshot=true ! filesink location="$WORK/mask.png" 2>/dev/null
+python3 - "$WORK" << 'PYEOF'
+import sys
+from PIL import Image
+w = sys.argv[1]
+im = Image.open(f"{w}/mask.png").convert("RGB")
+px = im.load()
+# a frame corner sits outside the circle mask: blue bg must show through
+r, g, b = px[10, 10]
+assert b > 150 and r < 100, f"mask corner not blue bg: {(r,g,b)}"
+PYEOF
+check "mask shows bg outside the shape" $?
+
+# ---- 3c. mask invert flips which side is visible ----------------------
+python3 - "$WORK" << 'PYEOF'
+import json, sys
+w = sys.argv[1]
+p = {"meta": {"title": "mask-inv", "width": 320, "height": 180, "fps": 30},
+  "defs": {}, "overlays": [],
+  "scenes": [{"id": "s", "duration": 1, "layers": [
+    {"id": "fg", "start": 0, "duration": 0, "type": "test",
+     "effects": [{"type": "mask", "shape": "circle", "feather": 0, "invert": True}]},
+    {"id": "bg", "start": 0, "duration": 0, "type": "shape", "shape": "rect", "fill": "#0000ff",
+     "transform": {"x":0,"y":0,"width":320,"height":180}}]}]}
+json.dump(p, open(f"{w}/mask-inv.json", "w"))
+PYEOF
+"$BIN" "$WORK/mask-inv.json" "$WORK/mask-inv.webm" webm > /dev/null 2>&1
+check "mask invert render" $?
+gst-launch-1.0 -q filesrc location="$WORK/mask-inv.webm" ! decodebin ! videoconvert ! videorate ! \
+  'video/x-raw,framerate=1/1' ! pngenc snapshot=true ! filesink location="$WORK/mask-inv.png" 2>/dev/null
+python3 - "$WORK" << 'PYEOF'
+import sys
+from PIL import Image
+w = sys.argv[1]
+im = Image.open(f"{w}/mask-inv.png").convert("RGB")
+px = im.load()
+# inverted: the shape's interior (center) is now hidden, showing bg
+r, g, b = px[160, 90]
+assert b > 150 and r < 100, f"inverted center not blue bg: {(r,g,b)}"
+PYEOF
+check "mask invert flips visible side" $?
+
 # ---- 4. every export profile produces a nonempty file ----------------
 # m4a is the one profile here that needs an AAC encoder autoplugged by
 # caps (avenc_aac ships Rank::NONE upstream and is excluded from

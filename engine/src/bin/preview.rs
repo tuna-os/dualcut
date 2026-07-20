@@ -2443,6 +2443,69 @@ impl Editor {
                         });
                     }
                 }
+                document::Effect::Mask { shape, feather, invert } => {
+                    const SHAPES: [&str; 7] =
+                        ["rect", "circle", "ellipse", "star", "polygon", "line", "arrow"];
+                    let shape_index = |s: document::ShapeKind| -> u32 {
+                        match s {
+                            document::ShapeKind::Rect => 0,
+                            document::ShapeKind::Circle => 1,
+                            document::ShapeKind::Ellipse => 2,
+                            document::ShapeKind::Star => 3,
+                            document::ShapeKind::Polygon => 4,
+                            document::ShapeKind::Line => 5,
+                            document::ShapeKind::Arrow => 6,
+                        }
+                    };
+                    let l = gtk::Label::new(Some("Shape"));
+                    l.add_css_class("dim-label");
+                    let dd = gtk::DropDown::from_strings(&SHAPES);
+                    dd.set_selected(shape_index(*shape));
+                    row.append(&pair(l.upcast_ref(), dd.upcast_ref()));
+                    {
+                        let commit_fx = commit_fx.clone();
+                        dd.connect_selected_notify(move |dd| {
+                            let v = match dd.selected() {
+                                0 => document::ShapeKind::Rect,
+                                1 => document::ShapeKind::Circle,
+                                2 => document::ShapeKind::Ellipse,
+                                3 => document::ShapeKind::Star,
+                                4 => document::ShapeKind::Polygon,
+                                5 => document::ShapeKind::Line,
+                                _ => document::ShapeKind::Arrow,
+                            };
+                            commit_fx(Box::new(move |fx| {
+                                if let document::Effect::Mask { shape, .. } = fx {
+                                    *shape = v;
+                                }
+                            }));
+                        });
+                    }
+                    let (l, s) = fx_spin("Feather", *feather, 0.0, 50.0, 0.5);
+                    row.append(&pair(l.upcast_ref(), s.upcast_ref()));
+                    {
+                        let commit_fx = commit_fx.clone();
+                        s.connect_value_changed(move |s| {
+                            let v = s.value();
+                            commit_fx(Box::new(move |fx| {
+                                if let document::Effect::Mask { feather, .. } = fx {
+                                    *feather = v;
+                                }
+                            }));
+                        });
+                    }
+                    let inv_check = gtk::CheckButton::with_label("Invert");
+                    inv_check.set_active(*invert);
+                    row.append(&inv_check);
+                    inv_check.connect_toggled(move |c| {
+                        let v = c.is_active();
+                        commit_fx(Box::new(move |fx| {
+                            if let document::Effect::Mask { invert, .. } = fx {
+                                *invert = v;
+                            }
+                        }));
+                    });
+                }
             }
             let rm = gtk::Button::from_icon_name("window-close-symbolic");
             rm.update_property(&[gtk::accessible::Property::Label("Remove effect")]);
@@ -2484,6 +2547,9 @@ impl Editor {
             ("+ EQ", document::Effect::Eq { low: 0.0, mid: 0.0, high: 0.0 }),
             ("+ Compressor", document::Effect::Compressor { threshold: 0.25, ratio: 2.0 }),
             ("+ Denoise", document::Effect::Denoise { level: 1 }),
+            ("+ Mask", document::Effect::Mask {
+                shape: document::ShapeKind::Circle, feather: 0.0, invert: false,
+            }),
         ] {
             let b = gtk::Button::with_label(label);
             let this = self.clone();

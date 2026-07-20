@@ -405,7 +405,8 @@
             "crop",
             "eq",
             "compressor",
-            "denoise"
+            "denoise",
+            "mask"
           ]
         },
         "amount": {
@@ -491,6 +492,25 @@
           "type": "integer",
           "minimum": 0,
           "maximum": 3
+        },
+        "shape": {
+          "enum": [
+            "rect",
+            "circle",
+            "ellipse",
+            "star",
+            "polygon",
+            "line",
+            "arrow"
+          ]
+        },
+        "feather": {
+          "type": "number",
+          "minimum": 0,
+          "maximum": 50
+        },
+        "invert": {
+          "type": "boolean"
         }
       }
     }

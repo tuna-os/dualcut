@@ -259,16 +259,51 @@ pub fn shape_png(
     width: u32,
     height: u32,
 ) -> Result<PathBuf> {
+    shape_png_maybe_inverted(cache_dir, kind, fill_hex, width, height, 0.0, false)
+}
+
+/// As [`shape_png`], but with an optional soft (`feather`, Gaussian sigma
+/// in pixels) edge and/or the painted/unpainted regions swapped
+/// (`invert`): opaque where the shape was absent, transparent where it
+/// was present. Used to bake a freeform shape mask matte (#41): rather
+/// than a GStreamer element inverting/feathering a live alpha stream (no
+/// plain video-invert element exists in the available gst-plugins-{good,
+/// bad} set, and `videobalance`'s `contrast` clamps at 0 instead of
+/// negating), both transforms are baked into the raster once and cached.
+pub fn shape_png_maybe_inverted(
+    cache_dir: &Path,
+    kind: ShapeKind,
+    fill_hex: &str,
+    width: u32,
+    height: u32,
+    feather: f64,
+    invert: bool,
+) -> Result<PathBuf> {
     let file = cache_dir.join(format!(
-        "shape-{kind:?}-{}-{width}x{height}.png",
-        fill_hex.trim_start_matches('#')
+        "shape-{kind:?}-{}-{width}x{height}-f{feather}{}.png",
+        fill_hex.trim_start_matches('#'),
+        if invert { "-inv" } else { "" }
     ));
     if file.exists() {
         return Ok(file);
     }
     std::fs::create_dir_all(cache_dir)?;
-    let pixels = render_shape_rgba(kind, fill_hex, width, height, 0.0)?;
-    let img = image::RgbaImage::from_raw(width, height, pixels).context("image from raw")?;
+    let mut pixels = render_shape_rgba(kind, fill_hex, width, height, 0.0)?;
+    if invert {
+        let argb = parse_color(fill_hex);
+        let (r, g, b) = (((argb >> 16) & 0xff) as u8, ((argb >> 8) & 0xff) as u8, (argb & 0xff) as u8);
+        for px in pixels.chunks_exact_mut(4) {
+            if px[3] == 0 {
+                px.copy_from_slice(&[r, g, b, 255]);
+            } else {
+                px.copy_from_slice(&[0, 0, 0, 0]);
+            }
+        }
+    }
+    let mut img = image::RgbaImage::from_raw(width, height, pixels).context("image from raw")?;
+    if feather > 0.0 {
+        img = image::imageops::blur(&img, feather as f32);
+    }
     img.save(&file).with_context(|| format!("saving {}", file.display()))?;
     Ok(file)
 }

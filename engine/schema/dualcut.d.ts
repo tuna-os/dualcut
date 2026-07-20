@@ -183,6 +183,15 @@ export type Effect =
       /** 0..2, neutral 1 */ contrast?: number;
       /** 0..2, neutral 1 */ saturation?: number;
       /** -1..1, neutral 0 */ hue?: number;
+    }
+  | {
+      type: "mask";
+      /** Only `video`/`test` clips; other types warn and skip (#41). */
+      shape: "rect" | "circle" | "ellipse" | "star" | "polygon" | "line" | "arrow";
+      /** Soft edge, Gaussian sigma in pixels, 0-50. */
+      feather?: number;
+      /** Show outside the shape instead of inside it. */
+      invert?: boolean;
     };
 
 export interface Keyframe {

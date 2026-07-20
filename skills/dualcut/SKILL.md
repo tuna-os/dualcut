@@ -52,9 +52,10 @@ be a live vector source: `vello://star?fill=%23ff5470&w=200&h=200&spin=1`.
 Animations: tween `{property, from, to, start, end, easing}` or keyframes
 `{property, keyframes: [{t, value, easing}, ...]}` (>=2, increasing t);
 property: x|y|width|height|opacity|volume (volume for audio fades).
-Effects: `effects: [{type: blur|color|chromakey|crop|eq|compressor, ...}]`
+Effects: `effects: [{type: blur|color|chromakey|crop|eq|compressor|mask, ...}]`
 (chromakey: color/angle/noise green-screen; crop: left/right/top/bottom px;
-eq: low/mid/high dB; compressor: threshold/ratio).
+eq: low/mid/high dB; compressor: threshold/ratio; mask: shape/feather/invert
+freeform shape mask, `video`/`test` clips only).
 Text extras: align (left|center|right), outline (color), shadow (bool).
 Overlay tracks: muted/hidden booleans.
 HTTP POST /op: split (id, at) | ripple_delete (id) | detach_audio (id) |

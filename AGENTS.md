@@ -57,8 +57,10 @@ Clip: `{ id, start, duration, type, …element fields, transform?, animations?, 
 - effects: `{type: "blur", amount}` (sigma 0-50); `{type: "color",
   brightness?, contrast?, saturation?, hue?}`; `{type: "chromakey",
   color?, angle?, noise?}` (green screen); `{type: "crop", left?,
-  right?, top?, bottom?}`; audio: `{type: "eq", low?, mid?, high?}`
-  (dB), `{type: "compressor", threshold?, ratio?}`, and
+  right?, top?, bottom?}`; `{type: "mask", shape, feather?, invert?}`
+  (freeform shape mask, `video`/`test` clips only — see below); audio:
+  `{type: "eq", low?, mid?, high?}` (dB),
+  `{type: "compressor", threshold?, ratio?}`, and
   `{type: "denoise", level?}` (0-3)
 - scene transition kinds: crossfade | wipe-lr | wipe-tb | box-wipe | iris | clock
 - defs may nest (compref inside a def); cycles are rejected at validation
@@ -86,6 +88,20 @@ with the same `src`/`offset` wherever you want it.
 `vector` feature: rect, circle, ellipse, star, polygon, line, arrow, with
 `fill` (#rrggbb/#aarrggbb) and size from `transform.width/height`.
 Rasters cache under `<project dir>/.dualcut-cache/`.
+
+## Freeform shape masks (#41)
+
+`{type: "mask", shape, feather?, invert?}` on a `video`/`test` clip
+compile-time bakes a real alpha-channel copy of that clip (shape
+rasterized via Vello, combined with the source through `alphacombine`,
+encoded FFV1/A420 in Matroska, cached under `.dualcut-cache/`) and swaps
+it in for the original source. GES's own layer compositing then reveals
+whatever's on a lower layer through the transparent region -- true
+track-matte, not a solid-color cutout. GES itself can't build the
+alphacombine bin as a single-clip effect (multi-source bins are
+rejected), so this bakes ahead of time instead, the same "slow but
+cached" tradeoff already used for preview proxies. Needs the `vector`
+feature; other clip types warn and skip.
 
 ## Scripting (M4)
 
