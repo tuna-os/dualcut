@@ -3810,6 +3810,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
 
     let menu = gtk::gio::Menu::new();
     menu.append(Some("New Project"), Some("app.new-project"));
+    menu.append(Some("New Vertical Project (9:16)"), Some("app.new-vertical-project"));
     menu.append(Some("Save Project As…"), Some("app.save-as"));
     menu.append(Some("Generate Captions…"), Some("app.captions"));
     menu.append(Some("Install Agent Skills…"), Some("app.install-skills"));
@@ -4294,6 +4295,29 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                 }
                 if let Some(win) = editor.window() {
                     win.set_title(Some("Dualcut — New Project (unsaved)"));
+                }
+                editor.rebuild_in_memory(project);
+            });
+        }
+        app.add_action(&a);
+        // Portrait canvas for short-form/social export (#48); pairs with
+        // the vertical-center-crop / vertical-top-bottom-split starter
+        // defs, which assume a 16:9 source and this exact 1080x1920 frame.
+        let a = make("new-vertical-project");
+        {
+            let editor = editor.clone();
+            a.connect_activate(move |_, _| {
+                let project =
+                    dualcut_engine::templates::new_project_sized("New Vertical Project", 1080, 1920);
+                {
+                    let mut st = editor.state.borrow_mut();
+                    st.project_path = None;
+                    st.history.clear();
+                    st.redo.clear();
+                    st.selected = None;
+                }
+                if let Some(win) = editor.window() {
+                    win.set_title(Some("Dualcut — New Vertical Project (unsaved)"));
                 }
                 editor.rebuild_in_memory(project);
             });

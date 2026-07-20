@@ -240,6 +240,60 @@
       }
     ]
   },
+  "vertical-center-crop": {
+    "params": [
+      "clip"
+    ],
+    "layers": [
+      {
+        "id": "vc-video",
+        "start": 0,
+        "duration": 0,
+        "type": "video",
+        "src": "{clip}",
+        "transform": {
+          "x": -1166.67,
+          "y": 0,
+          "width": 3413.33,
+          "height": 1920
+        }
+      }
+    ]
+  },
+  "vertical-top-bottom-split": {
+    "params": [
+      "top_clip",
+      "bottom_clip"
+    ],
+    "layers": [
+      {
+        "id": "vs-top",
+        "start": 0,
+        "duration": 0,
+        "type": "video",
+        "src": "{top_clip}",
+        "transform": {
+          "x": -313.33,
+          "y": 0,
+          "width": 1706.67,
+          "height": 960
+        }
+      },
+      {
+        "id": "vs-bottom",
+        "start": 0,
+        "duration": 0,
+        "type": "video",
+        "src": "{bottom_clip}",
+        "transform": {
+          "x": -313.33,
+          "y": 960,
+          "width": 1706.67,
+          "height": 960
+        }
+      }
+    ]
+  },
   "callout": {
     "params": [
       "note"
