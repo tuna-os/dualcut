@@ -13,10 +13,45 @@ use ges::prelude::*;
 use gstreamer as gst;
 use gstreamer_controller as gst_controller;
 use gstreamer_editing_services as ges;
+use gstreamer_pbutils as gst_pbutils;
 use std::collections::BTreeMap;
+use std::sync::{Mutex, OnceLock};
 
 fn secs(t: f64) -> gst::ClockTime {
     gst::ClockTime::from_useconds((t.max(0.0) * 1_000_000.0) as u64)
+}
+
+/// Cache of URIs already probed by [`probe_discoverable`], so a project
+/// referencing a broken file only pays the probe cost once per process
+/// even though `compile`/`compile_scaled` reruns from scratch on every
+/// preview edit.
+fn probe_cache() -> &'static Mutex<std::collections::HashMap<String, bool>> {
+    static CACHE: OnceLock<Mutex<std::collections::HashMap<String, bool>>> = OnceLock::new();
+    CACHE.get_or_init(|| Mutex::new(std::collections::HashMap::new()))
+}
+
+/// Probe a media URI with a standalone `gst_pbutils::Discoverer` before
+/// ever creating a `ges::UriClip` for it. GES's own asset-loading runs
+/// discovery through its shared, process-wide `GESDiscovererManager`,
+/// whose per-URI request bookkeeping has a known race when a discovery
+/// request is still in flight while its tracking data gets freed
+/// (upstream: gstreamer#3757, only partially fixed) -- a real, aborting
+/// `g_assert()` in `ges-discoverer-manager.c`, not something catchable
+/// from Rust. A missing-codec file widens that race window (discovery
+/// fails slowly instead of succeeding fast) and reliably triggers it in
+/// practice. A private `Discoverer` instance never touches that shared
+/// manager at all, so probing here first and skipping the `UriClip`
+/// entirely on failure avoids the crash path rather than trying to
+/// survive it.
+fn probe_discoverable(uri: &str) -> bool {
+    if let Some(&ok) = probe_cache().lock().unwrap().get(uri) {
+        return ok;
+    }
+    let ok = gst_pbutils::Discoverer::new(gst::ClockTime::from_seconds(8))
+        .and_then(|d| d.discover_uri(uri))
+        .is_ok();
+    probe_cache().lock().unwrap().insert(uri.to_string(), ok);
+    ok
 }
 
 pub struct Compiled {
@@ -257,47 +292,71 @@ fn add_clip(
         Element::Video { src, offset: inpoint, volume, rate }
         | Element::Audio { src, offset: inpoint, volume, rate } => {
             let uri = to_uri(src, base_dir)?;
-            let media = ges::UriClip::new(&uri).with_context(|| format!("opening {src}"))?;
-            media.set_start(start);
-            media.set_inpoint(secs(*inpoint));
-            media.set_duration(duration);
-            if matches!(clip.element, Element::Audio { .. }) {
-                media.set_supported_formats(ges::TrackType::AUDIO);
-            }
-            layer.add_clip(&media)?;
-            // Speed (#32): GES auto-registers pitch/videorate rate
-            // properties and drives nle's media consumption itself
-            // (verified by reproducer; see issue).
-            let animates_rate =
-                clip.animations.iter().any(|a| a.property == AnimProperty::Rate);
-            if (*rate - 1.0).abs() > f64::EPSILON || animates_rate {
-                let pitch = ges::Effect::new(&format!("pitch name=dcrate tempo={rate}"))
-                    .context("pitch effect (rate)")?;
-                media.add(&pitch).context("adding pitch rate effect")?;
-                if matches!(clip.element, Element::Video { .. }) {
-                    let vrate = ges::Effect::new(&format!("videorate name=dcvrate rate={rate}"))
-                        .context("videorate effect")?;
-                    media.add(&vrate).context("adding videorate effect")?;
+            // Probe before ever handing this URI to GES (see
+            // probe_discoverable's doc comment) -- an undecodable file
+            // here isn't a normal error GES reports, it's a process
+            // abort, so this clip is skipped with a warning instead of
+            // risking the crash.
+            if !probe_discoverable(&uri) {
+                warnings.push(format!(
+                    "clip {:?}: {src:?} isn't decodable on this GStreamer install (missing \
+                     plugin or unsupported codec profile) -- skipped",
+                    clip.id
+                ));
+                None
+            } else {
+                let media = ges::UriClip::new(&uri).with_context(|| format!("opening {src}"))?;
+                media.set_start(start);
+                media.set_inpoint(secs(*inpoint));
+                media.set_duration(duration);
+                if matches!(clip.element, Element::Audio { .. }) {
+                    media.set_supported_formats(ges::TrackType::AUDIO);
                 }
+                layer.add_clip(&media)?;
+                // Speed (#32): GES auto-registers pitch/videorate rate
+                // properties and drives nle's media consumption itself
+                // (verified by reproducer; see issue).
+                let animates_rate =
+                    clip.animations.iter().any(|a| a.property == AnimProperty::Rate);
+                if (*rate - 1.0).abs() > f64::EPSILON || animates_rate {
+                    let pitch = ges::Effect::new(&format!("pitch name=dcrate tempo={rate}"))
+                        .context("pitch effect (rate)")?;
+                    media.add(&pitch).context("adding pitch rate effect")?;
+                    if matches!(clip.element, Element::Video { .. }) {
+                        let vrate =
+                            ges::Effect::new(&format!("videorate name=dcvrate rate={rate}"))
+                                .context("videorate effect")?;
+                        media.add(&vrate).context("adding videorate effect")?;
+                    }
+                }
+                // Volume rides an explicit effect; GES's own child-property
+                // route scales values wrongly on this GStreamer (see ADR).
+                let animates_volume =
+                    clip.animations.iter().any(|a| a.property == AnimProperty::Volume);
+                if (*volume - 1.0).abs() > f64::EPSILON || animates_volume {
+                    let fx = ges::Effect::new(&format!("volume name=dcvol volume={volume}"))
+                        .context("volume effect")?;
+                    media.add(&fx).context("adding volume effect")?;
+                }
+                Some(media.upcast())
             }
-            // Volume rides an explicit effect; GES's own child-property
-            // route scales values wrongly on this GStreamer (see ADR).
-            let animates_volume =
-                clip.animations.iter().any(|a| a.property == AnimProperty::Volume);
-            if (*volume - 1.0).abs() > f64::EPSILON || animates_volume {
-                let fx = ges::Effect::new(&format!("volume name=dcvol volume={volume}"))
-                    .context("volume effect")?;
-                media.add(&fx).context("adding volume effect")?;
-            }
-            Some(media.upcast())
         }
         Element::Image { src } => {
             let uri = to_uri(src, base_dir)?;
-            let media = ges::UriClip::new(&uri).with_context(|| format!("opening {src}"))?;
-            media.set_start(start);
-            media.set_duration(duration);
-            layer.add_clip(&media)?;
-            Some(media.upcast())
+            if !probe_discoverable(&uri) {
+                warnings.push(format!(
+                    "clip {:?}: {src:?} isn't decodable on this GStreamer install (missing \
+                     plugin or unsupported format) -- skipped",
+                    clip.id
+                ));
+                None
+            } else {
+                let media = ges::UriClip::new(&uri).with_context(|| format!("opening {src}"))?;
+                media.set_start(start);
+                media.set_duration(duration);
+                layer.add_clip(&media)?;
+                Some(media.upcast())
+            }
         }
         Element::Test {} => {
             let test = ges::TestClip::new().context("test clip")?;
@@ -823,4 +882,65 @@ fn to_uri(src: &str, base_dir: &std::path::Path) -> Result<String> {
         bail!("media file not found: {}", path.display());
     }
     Ok(format!("file://{}", path.canonicalize()?.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::document::{Meta, Scene};
+
+    /// A video whose codec profile a GStreamer install can't decode isn't
+    /// a normal, catchable error from GES -- it's a `g_assert()` abort
+    /// deep in `ges-discoverer-manager.c` (upstream gstreamer#3757, only
+    /// partially fixed). `probe_discoverable` exists specifically to
+    /// avoid ever handing such a URI to `ges::UriClip::new()`. This is a
+    /// robustness test, not a behavior-exact one: whether `ball.mp4`'s
+    /// High-4:4:4 10-bit profile is actually decodable depends on the
+    /// host's GStreamer plugins, so the only thing asserted unconditionally
+    /// is that compiling never aborts the process and always returns a
+    /// clean `Result` either way -- if `probe_discoverable` regressed back
+    /// to calling `ges::UriClip::new()` unconditionally, this test would
+    /// crash the entire test binary on a host missing that decoder, not
+    /// just fail one assertion.
+    #[test]
+    fn compiling_an_undecodable_video_never_aborts_the_process() {
+        crate::init().ok();
+        let base_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples");
+        let project = Project {
+            meta: Meta { title: "probe-test".into(), width: 320, height: 180, fps: 25 },
+            library: Vec::new(),
+            defs: Default::default(),
+            scenes: vec![Scene {
+                id: "s1".into(),
+                name: String::new(),
+                duration: 1.0,
+                transition: None,
+                layers: vec![Clip {
+                    id: "maybe-broken".into(),
+                    start: 0.0,
+                    duration: 1.0,
+                    element: Element::Video {
+                        src: "assets/ball.mp4".into(),
+                        offset: 0.0,
+                        volume: 1.0,
+                        rate: 1.0,
+                    },
+                    transform: Default::default(),
+                    animations: Vec::new(),
+                    effects: Vec::new(),
+                }],
+            }],
+            overlays: Vec::new(),
+            scene_lanes: Vec::new(),
+        };
+        // The assertion that matters is simply reaching this line at all
+        // -- a regression here aborts the whole process, which no
+        // `Result` handling below could express as a normal test failure.
+        let result = compile(&project, &base_dir);
+        assert!(
+            result.is_ok(),
+            "compile should degrade gracefully, not error: {:?}",
+            result.err()
+        );
+    }
 }
