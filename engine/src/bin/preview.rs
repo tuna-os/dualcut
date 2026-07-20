@@ -2425,6 +2425,76 @@ impl Editor {
             }
             actions.append(&detach);
         }
+        if matches!(
+            clip.element,
+            document::Element::Video { .. } | document::Element::Audio { .. }
+        ) {
+            let remove_silence_btn = gtk::Button::with_label("Remove silences…");
+            {
+                let this = self.clone();
+                let id = clip.id.clone();
+                let project_snapshot = project.clone();
+                let base_dir = self.base_dir();
+                remove_silence_btn.connect_clicked(move |btn| {
+                    let Some(clip) = find_clip(&project_snapshot, &id) else { return };
+                    let src = match &clip.element {
+                        document::Element::Video { src, .. } | document::Element::Audio { src, .. } => {
+                            src.clone()
+                        }
+                        _ => return,
+                    };
+                    let Some(uri) = media_uri(&src, &base_dir) else { return };
+                    btn.set_sensitive(false);
+                    btn.set_label("Detecting…");
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    std::thread::spawn(move || {
+                        let result = dualcut_engine::silence::detect_silence_in_uri(&uri, -40.0, 0.5);
+                        let _ = tx.send(result);
+                    });
+                    let this = this.clone();
+                    let id = id.clone();
+                    let project_snapshot = project_snapshot.clone();
+                    let btn = btn.clone();
+                    glib::timeout_add_local(std::time::Duration::from_millis(200), move || {
+                        let reset = |btn: &gtk::Button| {
+                            btn.set_sensitive(true);
+                            btn.set_label("Remove silences…");
+                        };
+                        match rx.try_recv() {
+                            Ok(Ok(ranges)) => {
+                                let mut project = project_snapshot.clone();
+                                match document::remove_silence(&mut project, &id, &ranges) {
+                                    Ok(0) => {
+                                        reset(&btn);
+                                        this.toast("No silence detected");
+                                    }
+                                    Ok(n) => {
+                                        this.commit_document(project);
+                                        this.toast_undo(&format!(
+                                            "Removed {n} silent range{}",
+                                            if n == 1 { "" } else { "s" }
+                                        ));
+                                    }
+                                    Err(e) => {
+                                        reset(&btn);
+                                        this.toast(&format!("✗ {e}"));
+                                    }
+                                }
+                                glib::ControlFlow::Break
+                            }
+                            Ok(Err(e)) => {
+                                reset(&btn);
+                                this.toast(&format!("✗ silence detection failed: {e:#}"));
+                                glib::ControlFlow::Break
+                            }
+                            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+                            Err(_) => glib::ControlFlow::Break,
+                        }
+                    });
+                });
+            }
+            actions.append(&remove_silence_btn);
+        }
         let delete = gtk::Button::with_label("Delete clip");
         delete.add_css_class("destructive-action");
         {

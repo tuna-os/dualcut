@@ -144,18 +144,18 @@ fn fxhash(s: &str) -> u64 {
 const WF_W: u32 = 240;
 const WF_H: u32 = 28;
 
-/// Render (or fetch cached) a peak waveform strip for a media URI's audio.
-/// Synchronous — call from a worker thread.
-pub fn waveform_png(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
-    let file = cache_dir.join(format!("wave-{:016x}.png", fxhash(uri)));
-    if file.exists() {
-        return Ok(file);
-    }
-    std::fs::create_dir_all(cache_dir)?;
+/// Fixed decode rate for `decode_mono_pcm` -- plenty of resolution for
+/// waveform peaks and RMS-based silence detection (#46), far cheaper to
+/// decode/scan than the source rate.
+const PCM_SAMPLE_RATE: u32 = 8000;
 
+/// Decode a media URI's audio to mono f32 PCM at [`PCM_SAMPLE_RATE`] Hz.
+/// Synchronous — call from a worker thread. Shared by `waveform_png` and
+/// silence detection (#46).
+pub fn decode_mono_pcm(uri: &str) -> Result<(Vec<f32>, u32)> {
     let pipeline = gst::parse::launch(&format!(
         "uridecodebin uri=\"{uri}\" ! audioconvert ! audioresample ! \
-         audio/x-raw,format=F32LE,channels=1,rate=8000 ! \
+         audio/x-raw,format=F32LE,channels=1,rate={PCM_SAMPLE_RATE} ! \
          appsink name=sink sync=false"
     ))?
     .downcast::<gst::Pipeline>()
@@ -181,6 +181,19 @@ pub fn waveform_png(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
     if samples.is_empty() {
         anyhow::bail!("no audio samples decoded");
     }
+    Ok((samples, PCM_SAMPLE_RATE))
+}
+
+/// Render (or fetch cached) a peak waveform strip for a media URI's audio.
+/// Synchronous — call from a worker thread.
+pub fn waveform_png(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
+    let file = cache_dir.join(format!("wave-{:016x}.png", fxhash(uri)));
+    if file.exists() {
+        return Ok(file);
+    }
+    std::fs::create_dir_all(cache_dir)?;
+
+    let (samples, _rate) = decode_mono_pcm(uri)?;
 
     // Peak per bucket.
     let bucket = (samples.len() / WF_W as usize).max(1);

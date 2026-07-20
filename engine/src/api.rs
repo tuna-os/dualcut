@@ -106,8 +106,32 @@ pub fn serve_file_api(path: PathBuf, port: u16) -> Result<()> {
                         crate::document::move_clip_to_lane(&mut p, &id, lane, at)?;
                         serde_json::json!({"ok": true})
                     }
+                    // Detect + splice out silent stretches of the clip's
+                    // own media (#46). threshold_db/min_duration optional
+                    // (default -40.0 dBFS / 0.5s).
+                    #[cfg(feature = "preview")]
+                    "remove_silence" => {
+                        let threshold_db = req["threshold_db"].as_f64().unwrap_or(-40.0);
+                        let min_duration = req["min_duration"].as_f64().unwrap_or(0.5);
+                        let clip = crate::document::find_clip(&p, &id).context("no such clip")?;
+                        let src = match &clip.element {
+                            crate::document::Element::Video { src, .. }
+                            | crate::document::Element::Audio { src, .. } => src.clone(),
+                            _ => anyhow::bail!("clip {id:?} has no media"),
+                        };
+                        let base_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
+                        let uri = if src.contains("://") {
+                            src
+                        } else {
+                            let abs = base_dir.join(&src).canonicalize().context("resolving media path")?;
+                            format!("file://{}", abs.display())
+                        };
+                        let ranges = crate::silence::detect_silence_in_uri(&uri, threshold_db, min_duration)?;
+                        let removed = crate::document::remove_silence(&mut p, &id, &ranges)?;
+                        serde_json::json!({"ok": true, "removed": removed})
+                    }
                     other => anyhow::bail!(
-                        "unknown op {other:?} (split, ripple_delete, detach_audio, move_to_lane)"
+                        "unknown op {other:?} (split, ripple_delete, detach_audio, move_to_lane, remove_silence)"
                     ),
                 };
                 p.validate()?;
