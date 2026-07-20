@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 anyhow = "1.0.103"
+cairo-rs = { version = "0.22", features = ["png"], optional = true }
 gst-plugin-gtk4 = { version = "0.15.2", optional = true }
 gstreamer = "0.25.3"
 gstreamer-app = "0.25.2"
@@ -15,6 +16,8 @@ gstreamer-pbutils = "0.25.2"
 gtk4 = { version = "0.11.4", optional = true }
 image = { version = "0.25.10", optional = true }
 libadwaita = { features = ["v1_8"],  version = "0.9.2", optional = true }
+pango = { version = "0.22.8", optional = true }
+pangocairo = { version = "0.22.8", optional = true }
 pollster = { version = "1.0.1", optional = true }
 rustyscript = { version = "0.12.3", optional = true }
 serde = { version = "=1.0.219", features = ["derive"] }
@@ -24,9 +27,10 @@ url = "2.5.8"
 vello = { version = "0.9.0", optional = true }
 
 [features]
-preview = ["dep:gtk4", "dep:libadwaita", "dep:gst-plugin-gtk4", "dep:image"]
+preview = ["dep:gtk4", "dep:libadwaita", "dep:gst-plugin-gtk4", "dep:image", "karaoke"]
 scripting = ["dep:rustyscript"]
 vector = ["dep:vello", "dep:pollster", "dep:image"]
+karaoke = ["dep:cairo-rs", "dep:pango", "dep:pangocairo", "dep:image"]
 
 [[bin]]
 name = "render"

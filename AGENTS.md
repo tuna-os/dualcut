@@ -103,6 +103,23 @@ rejected), so this bakes ahead of time instead, the same "slow but
 cached" tradeoff already used for preview proxies. Needs the `vector`
 feature; other clip types warn and skip.
 
+## Karaoke-style captions (#53)
+
+`dualcut_engine::karaoke::karaoke_captions_to_clips` turns flat word-level
+`(start, end, word)` segments (whisper.cpp `--max-len 1`) into caption
+clips where the *whole line* stays visible and the currently-spoken word
+is highlighted, instead of one word popping on at a time. GES's
+`TitleClip` can't do this directly: `GstBaseTextOverlay`'s `auto-resize`
+isn't exposed as a settable child property (an isolated word clip and the
+full-sentence clip rescale inconsistently), and `TitleClip`'s `text`
+property is always markup-escaped (Pango markup only works through a raw
+`textoverlay`'s `pango-markup` sink caps, which GES doesn't expose
+either). Instead, each word-highlight state is rasterized once with
+Pango/Cairo (full line, one color-attribute span on the active word,
+same font/layout box every state so nothing rescales) and landed as an
+ordinary `Image` clip -- no GES text primitives involved. Needs the
+`karaoke` feature (pulled in automatically by `preview`).
+
 ## Scripting (M4)
 
 `POST /script` with a TypeScript body: `export function edit(p: Project): Project`.

@@ -16,6 +16,7 @@ pub mod document;
 pub mod api;
 #[cfg(feature = "preview")]
 pub mod thumbs;
+pub mod karaoke;
 pub mod mapping;
 pub mod silence;
 pub mod templates;

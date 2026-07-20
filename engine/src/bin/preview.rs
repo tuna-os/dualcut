@@ -3235,6 +3235,77 @@ fn apply_captions(editor: &Rc<Editor>, segments: &[(f64, f64, String)]) {
     editor.toast(&format!("✓ {count} captions added"));
 }
 
+/// Karaoke-style captions (#53): word-level segments in, rasterized
+/// highlight-state clips out (`karaoke::karaoke_captions_to_clips`).
+/// Rasterizing is real work (one Pango/Cairo render per word), so it runs
+/// on a worker thread just like the transcription step it follows, not
+/// inline on the GTK main thread.
+fn apply_karaoke_captions(editor: &Rc<Editor>, segments: &[(f64, f64, String)]) {
+    let (project, base_dir) = {
+        let st = editor.state.borrow();
+        let Some(project) = st.project.clone() else { return };
+        (project, editor.base_dir())
+    };
+    if segments.is_empty() {
+        editor.toast("No speech found");
+        return;
+    }
+    let words = segments.to_vec();
+    let (w, h) = (project.meta.width as u32, project.meta.height as u32);
+    let (tx, rx) = std::sync::mpsc::channel::<anyhow::Result<Vec<document::Clip>>>();
+    std::thread::spawn(move || {
+        let cache = base_dir.join(".dualcut-cache");
+        let _ = tx.send(dualcut_engine::karaoke::karaoke_captions_to_clips(&words, &cache, w, h));
+    });
+    let editor = editor.clone();
+    glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
+        match rx.try_recv() {
+            Ok(Ok(mut clips)) => {
+                let project = editor.state.borrow().project.clone();
+                let Some(mut project) = project else { return glib::ControlFlow::Break };
+                let used: std::collections::HashSet<String> = project
+                    .scenes
+                    .iter()
+                    .flat_map(|s| s.layers.iter())
+                    .chain(project.overlays.iter().flat_map(|t| t.clips.iter()))
+                    .map(|c| c.id.clone())
+                    .collect();
+                for (i, clip) in clips.iter_mut().enumerate() {
+                    let mut id = format!("sub-k{i}");
+                    let mut n = i;
+                    while used.contains(&id) {
+                        n += 1;
+                        id = format!("sub-k{n}");
+                    }
+                    clip.id = id;
+                }
+                let count = clips.len();
+                match project.overlays.iter_mut().find(|t| t.id == "subtitles") {
+                    Some(track) => track.clips.extend(clips),
+                    None => project.overlays.push(document::OverlayTrack {
+                        id: "subtitles".to_string(),
+                        muted: false,
+                        hidden: false,
+                        locked: false,
+                        name: "Subtitles".to_string(),
+                        clips,
+                    }),
+                }
+                editor.commit_document(project);
+                editor.toast(&format!("✓ {count} karaoke captions added"));
+                glib::ControlFlow::Break
+            }
+            Ok(Err(e)) => {
+                eprintln!("karaoke captions: {e:#}");
+                editor.toast(&format!("✗ karaoke captions failed: {e}"));
+                glib::ControlFlow::Break
+            }
+            Err(std::sync::mpsc::TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(_) => glib::ControlFlow::Break,
+        }
+    });
+}
+
 /// Auto-captions GUI flow (#37): explain, confirm, transcribe on a worker
 /// thread, then commit the subtitle clips as one undoable mutation.
 fn show_captions_dialog(editor: &Rc<Editor>) {
@@ -3262,12 +3333,16 @@ fn show_captions_dialog(editor: &Rc<Editor>) {
              to a ggml model file to use a different one."
         )),
     );
-    let word_mode = gtk::CheckButton::with_label("Word-by-word (pop-on captions)");
-    word_mode.set_tooltip_text(Some(
-        "Each word appears on its own, tightly timed to when it's spoken \
-         (TikTok/CapCut-style), instead of whole phrases at once",
+    let style = gtk::DropDown::from_strings(&["Phrases", "Pop-on-word", "Karaoke (word highlight)"]);
+    style.set_selected(0);
+    style.set_tooltip_text(Some(
+        "Phrases: whole sentences at once.\n\
+         Pop-on-word: each word appears on its own, tightly timed \
+         (TikTok/CapCut-style).\n\
+         Karaoke: the whole line stays visible with the active word \
+         highlighted, like YouTube/CapCut auto-captions.",
     ));
-    dialog.set_extra_child(Some(&word_mode));
+    dialog.set_extra_child(Some(&style));
     dialog.add_response("cancel", "Cancel");
     dialog.add_response("generate", "Generate");
     dialog.set_response_appearance("generate", adw::ResponseAppearance::Suggested);
@@ -3283,11 +3358,14 @@ fn show_captions_dialog(editor: &Rc<Editor>) {
         this.toast("Transcribing… captions will appear when ready");
         let (tx, rx) =
             std::sync::mpsc::channel::<std::result::Result<Vec<(f64, f64, String)>, String>>();
+        // Pop-on-word and karaoke both need word-level timestamps; only
+        // "Phrases" (index 0) uses whisper's own sentence segmentation.
+        let selected = style.selected();
+        let word_level = selected != 0;
         {
             let project_json = project_json.clone();
             let base_dir = base_dir.clone();
             let whisper = whisper.clone();
-            let word_level = word_mode.is_active();
             std::thread::spawn(move || {
                 let _ = tx.send(run_captions_job(project_json, base_dir, whisper, model, word_level));
             });
@@ -3296,7 +3374,11 @@ fn show_captions_dialog(editor: &Rc<Editor>) {
         glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
             match rx.try_recv() {
                 Ok(Ok(segments)) => {
-                    apply_captions(&this, &segments);
+                    if selected == 2 {
+                        apply_karaoke_captions(&this, &segments);
+                    } else {
+                        apply_captions(&this, &segments);
+                    }
                     glib::ControlFlow::Break
                 }
                 Ok(Err(e)) => {
