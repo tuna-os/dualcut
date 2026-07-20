@@ -302,6 +302,10 @@ struct Editor {
     /// across rebuild_inspector() calls since the widgets are torn down
     /// and rebuilt on every edit.
     clips_collapsed: RefCell<std::collections::HashSet<String>>,
+    /// Media URIs with a proxy transcode in flight on the thumbnail
+    /// worker (#50); checked by rebuild_media() to show a "Generating
+    /// preview…" spinner on that Library cell instead of a blank one.
+    pending_proxies: RefCell<std::collections::HashSet<String>>,
 }
 
 impl Editor {
@@ -1144,6 +1148,17 @@ impl Editor {
         let cache = cache.to_path_buf();
         let this = self.clone();
         let project_snapshot = catalog_project;
+        // Mark these URIs pending now (#50) so this same rebuild's
+        // subsequent rebuild_media() call shows a spinner immediately,
+        // rather than the cell just staying blank until the worker
+        // thread's single end-of-batch signal arrives.
+        {
+            let mut pending = this.pending_proxies.borrow_mut();
+            for uri in &proxies {
+                pending.insert(uri.clone());
+            }
+        }
+        let proxies_done = proxies.clone();
         let (tx, rx) = std::sync::mpsc::channel::<bool>();
         std::thread::spawn(move || {
             for uri in thumbs {
@@ -1185,6 +1200,12 @@ impl Editor {
         glib::timeout_add_local(std::time::Duration::from_millis(300), move || {
             match rx.try_recv() {
                 Ok(made_proxies) => {
+                    {
+                        let mut pending = this.pending_proxies.borrow_mut();
+                        for uri in &proxies_done {
+                            pending.remove(uri);
+                        }
+                    }
                     if made_proxies {
                         // Recompile so the preview pipeline picks up the
                         // freshly generated proxies (compile_project swaps
@@ -1251,6 +1272,25 @@ impl Editor {
             label.set_max_width_chars(14);
             label.set_tooltip_text(Some(&rel));
             cell.append(&label);
+
+            // Proxy transcode in flight (#50): the fast first-frame
+            // thumbnail above (if any) is usually already there, but the
+            // scrub-friendly proxy itself can take a few seconds -- show
+            // that it's working rather than leaving the cell looking done.
+            if let Some(uri) = media_uri(&rel, &base)
+                && self.pending_proxies.borrow().contains(&uri)
+            {
+                let row = gtk::Box::new(gtk::Orientation::Horizontal, 4);
+                row.set_halign(gtk::Align::Center);
+                let spinner = gtk::Spinner::new();
+                spinner.start();
+                row.append(&spinner);
+                let generating = gtk::Label::new(Some("Generating preview…"));
+                generating.add_css_class("dim-label");
+                generating.add_css_class("caption");
+                row.append(&generating);
+                cell.append(&row);
+            }
 
             // Right-click context menu: add / remove.
             let gesture = gtk::GestureClick::new();
@@ -3458,6 +3498,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
         exporting: Cell::new(false),
         export_queue: RefCell::new(VecDeque::new()),
         clips_collapsed: RefCell::new(std::collections::HashSet::new()),
+        pending_proxies: RefCell::new(std::collections::HashSet::new()),
     });
 
     let picture = gtk::Picture::builder()
