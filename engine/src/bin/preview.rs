@@ -284,6 +284,9 @@ struct Ui {
     /// `strip`'s horizontally-scrolling content, so "Layer n" / track
     /// names stay visible while the clips scroll past them.
     label_col: gtk::Box,
+    /// The horizontally-scrolling region wrapping `strip` -- its
+    /// allocated width is the "fit to window" target for zoom_to_fit().
+    content_scroll: gtk::ScrolledWindow,
     inspector: gtk::Box,
     media_grid: gtk::FlowBox,
     media_empty: gtk::Box,
@@ -525,6 +528,7 @@ impl Editor {
                     )));
                 }
                 self.rebuild_in_memory(project);
+                self.zoom_to_fit();
             }
             Err(e) => eprintln!("open failed: {e:#}"),
         }
@@ -701,6 +705,33 @@ impl Editor {
             col.append(&b);
         }
         col
+    }
+
+    /// Zoom so the whole project's current total duration fills the
+    /// timeline's visible width -- "100%" per #56 (the strip shows every
+    /// scene concatenated on one absolute-time axis, not a single scene
+    /// in isolation, so "fit" is naturally project-wide here rather than
+    /// per-scene). Falls back to the existing pps if the strip hasn't
+    /// been allocated a width yet (e.g. called before the window is
+    /// first shown).
+    fn zoom_to_fit(self: &Rc<Self>) {
+        let width = {
+            let ui = self.ui.borrow();
+            ui.as_ref().map(|u| u.content_scroll.width()).unwrap_or(0)
+        };
+        if width <= 0 {
+            return;
+        }
+        let duration = {
+            let st = self.state.borrow();
+            st.project.as_ref().map(|p| p.duration()).unwrap_or(0.0)
+        };
+        if duration <= 0.0 {
+            return;
+        }
+        let pps = (width as f64 / duration).clamp(4.0, 400.0);
+        self.state.borrow_mut().pps = pps;
+        self.rebuild_strip();
     }
 
     fn rebuild_strip(self: &Rc<Self>) {
@@ -1145,12 +1176,12 @@ impl Editor {
         let tpl_missing: Vec<String> = catalog_project
             .defs
             .iter()
-            .filter(|(_, d)| {
+            .filter(|(name, d)| {
                 let key = format!(
                     "tpl-{:016x}.png",
                     fx_hash(&serde_json::to_string(d).unwrap_or_default())
                 );
-                !cache.join(key).exists()
+                !cache.join(key).exists() && !failed_templates().lock().unwrap().contains(*name)
             })
             .map(|(n, _)| n.clone())
             .collect();
@@ -1200,6 +1231,7 @@ impl Editor {
                     &base_dir,
                 ) {
                     eprintln!("template thumb failed for {name}: {e:#}");
+                    failed_templates().lock().unwrap().insert(name);
                 }
             }
             for uri in waves {
@@ -2734,6 +2766,18 @@ fn failed_proxies() -> &'static std::sync::Mutex<std::collections::HashSet<Strin
     FAILED.get_or_init(Default::default)
 }
 
+/// Def names whose Templates-tab preview thumbnail failed this session --
+/// skipped on later rebuilds. Defs with a video/audio/image layer can
+/// never render a preview this way (the param-preview substitution fakes
+/// a value like "CLIP" for a {clip} param, which isn't a real media
+/// path), so without this a rebuild_strip() on every zoom/edit would
+/// retry -- and fail -- the same doomed thumbnail forever.
+fn failed_templates() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
+    static FAILED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
+        std::sync::OnceLock::new();
+    FAILED.get_or_init(Default::default)
+}
+
 fn media_uri(src: &str, base_dir: &std::path::Path) -> Option<String> {
     if src.contains("://") {
         return Some(src.to_string());
@@ -3944,6 +3988,19 @@ fn build_ui(app: &adw::Application) -> Result<()> {
             });
         }
         toolbar.append(&zoom);
+        let fit_btn = gtk::Button::from_icon_name("zoom-fit-best-symbolic");
+        fit_btn.add_css_class("flat");
+        fit_btn.set_tooltip_text(Some("Zoom to fit the whole timeline (#56)"));
+        fit_btn.update_property(&[gtk::accessible::Property::Label("Zoom to fit")]);
+        {
+            let editor = editor.clone();
+            let zoom = zoom.clone();
+            fit_btn.connect_clicked(move |_| {
+                editor.zoom_to_fit();
+                zoom.set_value(editor.state.borrow().pps);
+            });
+        }
+        toolbar.append(&fit_btn);
         let split_btn = gtk::Button::new();
         let split_content = adw::ButtonContent::builder()
             .icon_name("edit-cut-symbolic")
@@ -4370,6 +4427,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                     win.set_title(Some("Dualcut — New Project (unsaved)"));
                 }
                 editor.rebuild_in_memory(project);
+                editor.zoom_to_fit();
             });
         }
         app.add_action(&a);
@@ -4393,6 +4451,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                     win.set_title(Some("Dualcut — New Vertical Project (unsaved)"));
                 }
                 editor.rebuild_in_memory(project);
+                editor.zoom_to_fit();
             });
         }
         app.add_action(&a);
@@ -4603,6 +4662,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
             seek,
             strip,
             label_col,
+            content_scroll,
             inspector,
             media_grid,
             media_empty,
@@ -4618,5 +4678,12 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     editor.rebuild_media();
     editor.rebuild_templates();
     editor.refresh_code();
+    // Deferred (#56): the strip hasn't been allocated a real width yet
+    // at this point in startup (window.present() ran before Ui existed),
+    // so zoom_to_fit() would see width 0 and no-op if called eagerly.
+    {
+        let editor = editor.clone();
+        glib::idle_add_local_once(move || editor.zoom_to_fit());
+    }
     Ok(())
 }
