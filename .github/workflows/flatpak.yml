@@ -14,8 +14,18 @@ permissions:
 
 jobs:
   flatpak:
-    name: Build Flatpak bundle
-    runs-on: ubuntu-latest
+    name: Build Flatpak bundle (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-latest
+            bundle: dualcut.flatpak
+          - arch: aarch64
+            runs-on: ubuntu-24.04-arm
+            bundle: dualcut-aarch64.flatpak
+    runs-on: ${{ matrix.runs-on }}
     container:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
@@ -33,16 +43,19 @@ jobs:
       - name: Build bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6.7
         with:
-          bundle: dualcut.flatpak
+          bundle: ${{ matrix.bundle }}
           manifest-path: engine/build-aux/io.github.hanthor.Dualcut.json
-          cache-key: flatpak-builder-${{ hashFiles('engine/Cargo.lock', 'engine/build-aux/*.json') }}
+          cache-key: flatpak-builder-${{ matrix.arch }}-${{ hashFiles('engine/Cargo.lock', 'engine/build-aux/*.json') }}
+          arch: ${{ matrix.arch }}
 
       - name: Attach bundle to release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: dualcut.flatpak
-          generate_release_notes: true
+          files: ${{ matrix.bundle }}
+          # Only one matrix leg should (re)generate release notes, else
+          # concurrent uploads race to write them.
+          generate_release_notes: ${{ matrix.arch == 'x86_64' }}
 
   user-guide:
     name: Regenerate user-guide screenshots

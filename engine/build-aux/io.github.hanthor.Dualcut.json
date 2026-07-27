@@ -216,13 +216,23 @@
           "sha256": "a2681fde53018abd3366018f132617dd598002df78f156c7bc6d2ff608b56567",
           "only-arches": [
             "x86_64"
-          ]
+          ],
+          "dest-filename": "librusty_v8.a.gz"
+        },
+        {
+          "type": "file",
+          "url": "https://github.com/denoland/rusty_v8/releases/download/v137.3.0/librusty_v8_release_aarch64-unknown-linux-gnu.a.gz",
+          "sha256": "e368d0cb41c179c43a990e4ec4a55e44dd9762f1d34be15696acc4433f8a6c92",
+          "only-arches": [
+            "aarch64"
+          ],
+          "dest-filename": "librusty_v8.a.gz"
         },
         "cargo-sources.json"
       ],
       "build-options": {
         "env": {
-          "RUSTY_V8_ARCHIVE": "/run/build/dualcut/librusty_v8_release_x86_64-unknown-linux-gnu.a.gz"
+          "RUSTY_V8_ARCHIVE": "/run/build/dualcut/librusty_v8.a.gz"
         }
       }
     }

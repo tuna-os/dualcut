@@ -14,7 +14,11 @@ HTTP API for agents) — every surface stays in sync while the app runs.
 **Install / update (Flatpak):**
 
 ```sh
+# x86_64
 curl -LO https://github.com/tuna-os/dualcut/releases/latest/download/dualcut.flatpak && flatpak install --user --reinstall -y dualcut.flatpak
+# aarch64
+curl -LO https://github.com/tuna-os/dualcut/releases/latest/download/dualcut-aarch64.flatpak && flatpak install --user --reinstall -y dualcut-aarch64.flatpak
+
 flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json
 ```
 
