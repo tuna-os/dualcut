@@ -796,6 +796,16 @@ impl Editor {
             Ok((timeline, warnings)) => {
                 self.toast_compile_warnings(&warnings);
                 self.swap_pipeline(&timeline);
+                // #57: this in-memory path (unsaved project, or any GUI
+                // edit before first Save) skipped the duration/seek-range
+                // sync that the on-disk `rebuild()` path does -- so a new
+                // project's seek bar stayed clamped at its 0.1s startup
+                // default and the playhead never tracked real duration.
+                let duration = project.duration();
+                self.state.borrow_mut().duration = duration;
+                if let Some(ui) = self.ui.borrow().as_ref() {
+                    ui.seek.set_range(0.0, duration.max(0.1));
+                }
                 self.state.borrow_mut().project = Some(project);
                 self.rebuild_strip();
                 self.rebuild_inspector();
@@ -5371,6 +5381,17 @@ fn build_ui(app: &adw::Application) -> Result<()> {
 mod pipeline_tests {
     use super::*;
 
+    /// Real `ges::Pipeline` + `gtk4paintablesink` construction isn't safe
+    /// to run concurrently across threads without a live GLib main loop --
+    /// two of these tests running in parallel (the `cargo test` default)
+    /// deadlock instead of failing, which silently hung CI for 6+ hours
+    /// until it was auto-cancelled (see the "Test coverage for the last
+    /// untested engine modules" CI run). Serialize them instead.
+    fn lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     fn init_once() {
         static ONCE: std::sync::Once = std::sync::Once::new();
         ONCE.call_once(|| {
@@ -5393,6 +5414,7 @@ mod pipeline_tests {
     /// healthy edit, so a regression here means *nothing* previews.
     #[test]
     fn make_pipeline_and_start_paused_succeed_for_a_normal_project() {
+        let _guard = lock();
         init_once();
         let dir = std::env::temp_dir().join("dualcut-pipeline-test-normal");
         std::fs::create_dir_all(&dir).unwrap();
@@ -5441,6 +5463,7 @@ mod pipeline_tests {
     /// bug report trace back to.
     #[test]
     fn query_position_is_none_before_preroll() {
+        let _guard = lock();
         init_once();
         let dir = std::env::temp_dir().join("dualcut-pipeline-test-position");
         std::fs::create_dir_all(&dir).unwrap();
