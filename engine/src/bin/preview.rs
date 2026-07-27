@@ -574,9 +574,8 @@ mod keys {
 /// Preview-only: swap video clip sources for their cached 960px proxies
 /// where one exists. Exports go through render_project on the untouched
 /// document, so originals are never affected.
-fn with_proxies(project: &Project, base_dir: &std::path::Path) -> Project {
+fn with_proxies(project: &Project, base_dir: &std::path::Path, cache_dir: &std::path::Path) -> Project {
     let mut swapped = project.clone();
-    let cache = base_dir.join(".dualcut-cache");
     let clips = swapped
         .scenes
         .iter_mut()
@@ -587,7 +586,7 @@ fn with_proxies(project: &Project, base_dir: &std::path::Path) -> Project {
             && let Some(uri) = media_uri(src, base_dir)
             && uri.starts_with("file://")
         {
-            let proxy = dualcut_engine::thumbs::proxy_path(&cache, &uri);
+            let proxy = dualcut_engine::thumbs::proxy_path(cache_dir, &uri);
             if proxy.exists() {
                 *src = proxy.display().to_string();
             }
@@ -656,7 +655,7 @@ fn take_agent_marker(project_path: &std::path::Path) -> Option<(EditSource, Stri
 }
 
 fn compile_project(project: &Project, base_dir: &std::path::Path) -> Result<ges::Timeline> {
-    Ok(compile_project_with_warnings(project, base_dir)?.0)
+    Ok(compile_project_with_warnings(project, base_dir, base_dir)?.0)
 }
 
 /// As [`compile_project`], but also returns compile warnings so callers
@@ -666,11 +665,29 @@ fn compile_project_with_warnings(
     project: &Project,
     base_dir: &std::path::Path,
 ) -> Result<(ges::Timeline, Vec<String>)> {
+    compile_project_with_warnings_inner(project, base_dir, &base_dir.join(".dualcut-cache"))
+}
+
+/// As [`compile_project_with_warnings`] but with an explicit cache
+/// directory (editor passes `cache_dir()` for Flatpak safety, #63).
+pub(crate) fn compile_project_with_warnings_cache(
+    project: &Project,
+    base_dir: &std::path::Path,
+    cache_dir: &std::path::Path,
+) -> Result<(ges::Timeline, Vec<String>)> {
+    compile_project_with_warnings_inner(project, base_dir, cache_dir)
+}
+
+fn compile_project_with_warnings_inner(
+    project: &Project,
+    base_dir: &std::path::Path,
+    cache_dir: &std::path::Path,
+) -> Result<(ges::Timeline, Vec<String>)> {
     // Preview pipelines render at reduced resolution (Preferences) and
     // read proxy media where available; exports go through render_project
     // at full quality from the original sources.
     let project = if prefs_use_proxies() {
-        std::borrow::Cow::Owned(with_proxies(project, base_dir))
+        std::borrow::Cow::Owned(with_proxies(project, base_dir, cache_dir))
     } else {
         std::borrow::Cow::Borrowed(project)
     };
@@ -737,6 +754,36 @@ impl Editor {
             .as_ref()
             .and_then(|p| p.parent().map(|p| p.to_path_buf()))
             .unwrap_or_else(|| PathBuf::from("."))
+    }
+
+    /// Cache directory for thumbnails, proxies, shapes, etc. (#63).
+    /// Saved projects: `.dualcut-cache/` next to the project file (so
+    /// moving the project folder moves the cache with it — most editors
+    /// do this). Unsaved projects: `$XDG_CACHE_HOME/dualcut/` (falls
+    /// back to `~/.cache/dualcut/`), avoiding the non-writable cwd that
+    /// Flatpak and snaps impose.
+    fn cache_dir(&self) -> PathBuf {
+        if let Some(parent) = self
+            .state
+            .borrow()
+            .project_path
+            .as_ref()
+            .and_then(|p| p.parent())
+        {
+            return parent.join(".dualcut-cache");
+        }
+        // XDG_CACHE_HOME with POSIX fallback: XDG spec says ~/.cache
+        // when the env var is unset or empty.
+        if let Ok(dir) = std::env::var("XDG_CACHE_HOME")
+            && !dir.is_empty()
+        {
+            return PathBuf::from(dir).join("dualcut");
+        }
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home).join(".cache").join("dualcut");
+        }
+        // Last resort: temp dir (shouldn't happen on a normal desktop).
+        std::env::temp_dir().join("dualcut-cache")
     }
 
     /// Persist the document, push a history entry, rebuild everything.
@@ -824,7 +871,7 @@ impl Editor {
     }
 
     fn rebuild_in_memory(self: &Rc<Self>, project: Project) {
-        match compile_project_with_warnings(&project, &self.base_dir()) {
+        match compile_project_with_warnings_cache(&project, &self.base_dir(), &self.cache_dir()) {
             Ok((timeline, warnings)) => {
                 self.toast_compile_warnings(&warnings);
                 self.swap_pipeline(&timeline);
@@ -1071,7 +1118,7 @@ impl Editor {
             (st.project.clone(), self.base_dir())
         };
         let Some(project) = project else { return };
-        match compile_project_with_warnings(&project, &base_dir)
+        match compile_project_with_warnings_cache(&project, &base_dir, &self.cache_dir())
             .and_then(|(tl, warnings)| Ok((make_pipeline(&tl)?, warnings)))
         {
             Ok(((pipeline, paintable), warnings)) => {
@@ -1210,7 +1257,7 @@ impl Editor {
             (st.project.clone(), st.pps)
         };
         let Some(project) = project else { return };
-        let cache = self.base_dir().join(".dualcut-cache");
+        let cache = self.cache_dir();
         self.spawn_thumbnail_worker(&project, &cache);
 
         // Compact scene ruler: one thin strip showing scene segments and
@@ -1408,7 +1455,7 @@ impl Editor {
             (st.project.clone(), st.pps)
         };
         let Some(project) = project else { return };
-        let cache = self.base_dir().join(".dualcut-cache");
+        let cache = self.cache_dir();
 
         // Left-aligned label, not GtkButton's centered default (#56):
         // with_label()'s auto-created Label isn't exposed to re-align, so
@@ -1749,7 +1796,7 @@ impl Editor {
             )
         };
         ui.media_empty.set_visible(library.is_empty());
-        let cache = base.join(".dualcut-cache");
+        let cache = self.cache_dir();
         for rel in library {
             let cell = gtk::Box::new(gtk::Orientation::Vertical, 4);
             cell.set_margin_top(4);
@@ -2059,7 +2106,7 @@ impl Editor {
         };
         let defs: Vec<(String, Vec<String>)> =
             catalog.iter().map(|(n, d)| (n.clone(), d.params.clone())).collect();
-        let cache = self.base_dir().join(".dualcut-cache");
+        let cache = self.cache_dir();
         let def_hashes: std::collections::BTreeMap<String, String> = catalog
             .iter()
             .map(|(n, d)| {
@@ -3708,10 +3755,10 @@ fn apply_captions(editor: &Rc<Editor>, segments: &[(f64, f64, String)]) {
 /// on a worker thread just like the transcription step it follows, not
 /// inline on the GTK main thread.
 fn apply_karaoke_captions(editor: &Rc<Editor>, segments: &[(f64, f64, String)]) {
-    let (project, base_dir) = {
+    let (project, cache_dir) = {
         let st = editor.state.borrow();
         let Some(project) = st.project.clone() else { return };
-        (project, editor.base_dir())
+        (project, editor.cache_dir())
     };
     if segments.is_empty() {
         editor.toast("No speech found");
@@ -3721,7 +3768,7 @@ fn apply_karaoke_captions(editor: &Rc<Editor>, segments: &[(f64, f64, String)]) 
     let (w, h) = (project.meta.width as u32, project.meta.height as u32);
     let (tx, rx) = std::sync::mpsc::channel::<anyhow::Result<Vec<document::Clip>>>();
     std::thread::spawn(move || {
-        let cache = base_dir.join(".dualcut-cache");
+        let cache = cache_dir;
         let _ = tx.send(dualcut_engine::karaoke::karaoke_captions_to_clips(&words, &cache, w, h));
     });
     let editor = editor.clone();
