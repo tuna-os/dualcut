@@ -385,6 +385,11 @@ fn add_clip(
             Some(test.upcast())
         }
         Element::Shape { shape, fill } => {
+            // Only used by the `vector` render path below; still bound
+            // here so the `preview`-without-`vector` build (no shape
+            // rendering, warning-only fallback) doesn't warn on it.
+            #[cfg(not(feature = "vector"))]
+            let _ = &fill;
             #[cfg(feature = "vector")]
             {
                 let w = if clip.transform.width > 0.0 { clip.transform.width } else { 200.0 } as u32;
