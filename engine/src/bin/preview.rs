@@ -655,7 +655,7 @@ fn take_agent_marker(project_path: &std::path::Path) -> Option<(EditSource, Stri
 }
 
 fn compile_project(project: &Project, base_dir: &std::path::Path) -> Result<ges::Timeline> {
-    Ok(compile_project_with_warnings(project, base_dir, base_dir)?.0)
+    Ok(compile_project_with_warnings(project, base_dir)?.0)
 }
 
 /// As [`compile_project`], but also returns compile warnings so callers
