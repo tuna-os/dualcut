@@ -2,7 +2,7 @@
 Name=Dualcut
 Comment=Edit videos by timeline or by code
 Exec=dualcut %f
-Icon=io.github.hanthor.Dualcut
+Icon=org.tunaos.dualcut
 Terminal=false
 Type=Application
 Categories=AudioVideo;Video;AudioVideoEditing;GNOME;GTK;

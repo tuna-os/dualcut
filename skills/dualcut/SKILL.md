@@ -20,7 +20,7 @@ App (Flatpak, released builds):
 ```sh
 curl -LO https://github.com/tuna-os/dualcut/releases/latest/download/dualcut.flatpak
 flatpak install --user --reinstall -y dualcut.flatpak
-flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json   # opens + serves API
+flatpak run org.tunaos.dualcut ~/Videos/myproject.json   # opens + serves API
 ```
 
 From source (`engine/` dir): `cargo build --features preview,vector,scripting`.

@@ -2,7 +2,7 @@
   "//": "Flatpak manifest \u2014 the deliverable. Built in CI by .github/workflows/flatpak.yml,",
   "//2": "which generates cargo-sources.json with flatpak-cargo-generator before building.",
   "//3": "Scripting ships in the bundle: rusty_v8's static lib is provided offline via RUSTY_V8_ARCHIVE.",
-  "id": "io.github.hanthor.Dualcut",
+  "id": "org.tunaos.dualcut",
   "runtime": "org.gnome.Platform",
   "runtime-version": "50",
   "sdk": "org.gnome.Sdk",
@@ -194,9 +194,9 @@
       "build-commands": [
         "cargo --offline build --release --features preview,vector,scripting --bin preview",
         "install -Dm755 target/release/preview /app/bin/dualcut",
-        "install -Dm644 build-aux/io.github.hanthor.Dualcut.desktop /app/share/applications/io.github.hanthor.Dualcut.desktop",
-        "install -Dm644 build-aux/io.github.hanthor.Dualcut.metainfo.xml /app/share/metainfo/io.github.hanthor.Dualcut.metainfo.xml",
-        "install -Dm644 build-aux/io.github.hanthor.Dualcut.svg /app/share/icons/hicolor/scalable/apps/io.github.hanthor.Dualcut.svg",
+        "install -Dm644 build-aux/org.tunaos.dualcut.desktop /app/share/applications/org.tunaos.dualcut.desktop",
+        "install -Dm644 build-aux/org.tunaos.dualcut.metainfo.xml /app/share/metainfo/org.tunaos.dualcut.metainfo.xml",
+        "install -Dm644 build-aux/org.tunaos.dualcut.svg /app/share/icons/hicolor/scalable/apps/org.tunaos.dualcut.svg",
         "install -Dm644 skills-src/dualcut/SKILL.md /app/share/dualcut/skills/dualcut/SKILL.md",
         "cp -r skills-src/dualcut/references /app/share/dualcut/skills/dualcut/references"
       ],

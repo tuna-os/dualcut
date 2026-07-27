@@ -12,7 +12,7 @@ media off the DOM entirely.
 - **Scripting: TypeScript first**, but the scripting surface is a stable
   document + API boundary, so other languages can drive the editor too.
 - **This is a GNOME app**: GTK4 + libadwaita, GNOME HIG. **The deliverable
-  is a Flatpak** (starter manifest: `engine/build-aux/io.github.hanthor.Dualcut.json`).
+  is a Flatpak** (starter manifest: `engine/build-aux/org.tunaos.dualcut.json`).
 
 ## Why Rust (ecosystem survey)
 

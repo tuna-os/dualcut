@@ -15,9 +15,9 @@ HTTP API for agents) — every surface stays in sync while the app runs.
 
 ```sh
 flatpak remote-add --if-not-exists tuna-os https://tunaos.org/flatpak/tuna-os.flatpakrepo
-flatpak install tuna-os io.github.hanthor.Dualcut
+flatpak install tuna-os org.tunaos.dualcut
 
-flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json
+flatpak run org.tunaos.dualcut ~/Videos/myproject.json
 ```
 
 Updates land automatically (`flatpak update`) whenever a new `v*` tag ships.
@@ -64,7 +64,7 @@ cargo run --bin serve  -- myproject.json                  # headless agent API
 ```
 
 Needs GStreamer (+GES), GTK4, libadwaita dev packages; see
-[engine/build-aux/io.github.hanthor.Dualcut.json](engine/build-aux/io.github.hanthor.Dualcut.json)
+[engine/build-aux/org.tunaos.dualcut.json](engine/build-aux/org.tunaos.dualcut.json)
 for the canonical dependency list.
 
 ## Features

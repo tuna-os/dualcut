@@ -45,7 +45,7 @@ enum LaneToggle {
 
 fn main() -> glib::ExitCode {
     let app = adw::Application::builder()
-        .application_id("io.github.hanthor.Dualcut")
+        .application_id("org.tunaos.dualcut")
         // Skip D-Bus name acquisition: dev/CI environments may have a
         // broken or cross-namespace session bus, and single-instance
         // behavior is not needed for an editor.
@@ -3467,7 +3467,7 @@ fn show_skills_dialog(editor: &Rc<Editor>, window: Option<&gtk::Window>) {
 fn show_about(window: Option<&gtk::Window>) {
     let about = adw::AboutDialog::builder()
         .application_name("Dualcut")
-        .application_icon("io.github.hanthor.Dualcut")
+        .application_icon("org.tunaos.dualcut")
         .version(env!("CARGO_PKG_VERSION"))
         .developer_name("James Reilly")
         .developers(["James Reilly (hanthor)", "KiKaraage"])

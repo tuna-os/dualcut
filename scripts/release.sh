@@ -15,7 +15,7 @@ sed -i "s/^version = \".*\"/version = \"$VER\"/" engine/Cargo.toml
 python3 - "$VER" "$NOTE" << 'PY'
 import sys, datetime
 ver, note = sys.argv[1], sys.argv[2]
-path = 'engine/build-aux/io.github.hanthor.Dualcut.metainfo.xml'
+path = 'engine/build-aux/org.tunaos.dualcut.metainfo.xml'
 t = open(path).read()
 if f'version="{ver}"' not in t:
     entry = (f'    <release version="{ver}" date="{datetime.date.today()}">\n'

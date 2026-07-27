@@ -44,7 +44,7 @@ jobs:
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6.7
         with:
           bundle: ${{ matrix.bundle }}
-          manifest-path: engine/build-aux/io.github.hanthor.Dualcut.json
+          manifest-path: engine/build-aux/org.tunaos.dualcut.json
           cache-key: flatpak-builder-${{ matrix.arch }}-${{ hashFiles('engine/Cargo.lock', 'engine/build-aux/*.json') }}
           arch: ${{ matrix.arch }}
 
