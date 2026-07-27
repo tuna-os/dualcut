@@ -4992,14 +4992,25 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     // only rejects positions past the limit, it never demands extra width.
     {
         const MIN_SIDEBAR_WIDTH: i32 = 200;
+        // Re-entrancy guard: set_position() below re-triggers this same
+        // notify::position handler synchronously (observed hanging the
+        // #44 regression-check walkthrough step, which stacks wide effect
+        // rows onto this exact pane -- that resize storm kept re-entering
+        // the handler faster than the clamp could settle).
+        let clamping = Rc::new(std::cell::Cell::new(false));
         inner.connect_notify_local(Some("position"), move |paned, _| {
+            if clamping.get() {
+                return;
+            }
             let width = paned.width();
             if width <= 0 {
                 return;
             }
             let max_pos = (width - MIN_SIDEBAR_WIDTH).max(0);
             if paned.position() > max_pos {
+                clamping.set(true);
                 paned.set_position(max_pos);
+                clamping.set(false);
             }
         });
     }
