@@ -140,6 +140,38 @@ fn prefs_set_preview_scale(value: f64) {
     prefs_set("preview_scale", &value.to_string());
 }
 
+/// Font family used for new text objects and built-in templates (#61).
+/// Every built-in font spec (starter templates, `Element::Text` defaults)
+/// is a Pango description with family "Sans" -- swapping just that prefix
+/// is enough without needing a real Pango-description parser.
+fn prefs_default_font_family() -> String {
+    std::fs::read_to_string(prefs_file())
+        .ok()
+        .and_then(|s| {
+            s.lines().find_map(|l| l.trim().strip_prefix("default_font_family=").map(str::to_string))
+        })
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "Sans".to_string())
+}
+
+fn prefs_set_default_font_family(value: &str) {
+    prefs_set("default_font_family", value);
+}
+
+/// Rewrite a Pango font description's family to the configured default,
+/// e.g. "Sans Bold 32" -> "Verdana Bold 32". No-op for specs that don't
+/// start with the "Sans" family this codebase's built-in fonts all use.
+fn apply_default_font_family(spec: &str) -> String {
+    let family = prefs_default_font_family();
+    if family == "Sans" {
+        return spec.to_string();
+    }
+    match spec.strip_prefix("Sans") {
+        Some(rest) => format!("{family}{rest}"),
+        None => spec.to_string(),
+    }
+}
+
 /// Preview-only proxy media (960px MJPEG transcodes) — on unless disabled.
 fn prefs_use_proxies() -> bool {
     std::fs::read_to_string(prefs_file())
@@ -2108,8 +2140,13 @@ impl Editor {
         // Copy the def in from the starter catalog on first use (#21):
         // the project only carries the defs it actually uses.
         if !project.defs.contains_key(name)
-            && let Some(def) = dualcut_engine::templates::starter_defs().remove(name)
+            && let Some(mut def) = dualcut_engine::templates::starter_defs().remove(name)
         {
+            for layer in &mut def.layers {
+                if let document::Element::Text { font, .. } = &mut layer.element {
+                    *font = apply_default_font_family(font);
+                }
+            }
             project.defs.insert(name.to_string(), def);
         }
         let mut id = name.to_string();
@@ -4776,6 +4813,35 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                     });
                 }
                 group.add(&proxies);
+
+                // #61: family used for new text objects and built-in
+                // templates (starter defs are copied fresh on first
+                // insert, so this only affects future insertions -- it
+                // never rewrites text already on the timeline).
+                let font_row = adw::ActionRow::builder()
+                    .title("Default font")
+                    .subtitle("Used for new text objects and built-in templates")
+                    .build();
+                let font_dialog = gtk::FontDialog::new();
+                let font_button = gtk::FontDialogButton::builder()
+                    .dialog(&font_dialog)
+                    .level(gtk::FontLevel::Family)
+                    .valign(gtk::Align::Center)
+                    .build();
+                font_button
+                    .set_font_desc(&gtk::pango::FontDescription::from_string(
+                        &prefs_default_font_family(),
+                    ));
+                font_button.connect_font_desc_notify(move |b| {
+                    if let Some(desc) = b.font_desc()
+                        && let Some(family) = desc.family()
+                    {
+                        prefs_set_default_font_family(family.as_str());
+                    }
+                });
+                font_row.add_suffix(&font_button);
+                font_row.set_activatable_widget(Some(&font_button));
+                group.add(&font_row);
                 page.add(&group);
 
                 // Keyboard shortcuts: a preset picker (muscle memory from
@@ -4919,6 +4985,24 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     // fallback rather than the everyday case.
     inner.set_shrink_end_child(true);
     inner.set_position(620);
+    // #62: shrink_end_child(true) above (kept for #44 -- it stops a wide
+    // effect-param row from forcing the whole window wider) also let the
+    // user drag the handle all the way to 0, losing the sidebar entirely.
+    // Clamp the *manual* drag to a floor without reintroducing #44: this
+    // only rejects positions past the limit, it never demands extra width.
+    {
+        const MIN_SIDEBAR_WIDTH: i32 = 200;
+        inner.connect_notify_local(Some("position"), move |paned, _| {
+            let width = paned.width();
+            if width <= 0 {
+                return;
+            }
+            let max_pos = (width - MIN_SIDEBAR_WIDTH).max(0);
+            if paned.position() > max_pos {
+                paned.set_position(max_pos);
+            }
+        });
+    }
 
     let outer = gtk::Paned::new(gtk::Orientation::Horizontal);
     outer.set_start_child(Some(&left_tabs));
