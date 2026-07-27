@@ -156,7 +156,22 @@ pub fn render_shape_rgba(
     height: u32,
     rotate: f64,
 ) -> Result<Vec<u8>> {
-    let gpu = gpu().context("no GPU/Vulkan adapter available for shape rendering")?;
+    if let Some(gpu) = gpu() {
+        render_shape_rgba_gpu(gpu, kind, fill_hex, width, height, rotate)
+    } else {
+        render_shape_rgba_cpu(kind, fill_hex, width, height, rotate)
+    }
+}
+
+/// GPU path: Vello rasterization (#60 fallback split).
+fn render_shape_rgba_gpu(
+    gpu: &Gpu,
+    kind: ShapeKind,
+    fill_hex: &str,
+    width: u32,
+    height: u32,
+    rotate: f64,
+) -> Result<Vec<u8>> {
     let mut renderer = gpu.renderer.lock().unwrap();
 
     let argb = parse_color(fill_hex);
@@ -250,6 +265,181 @@ pub fn render_shape_rgba(
     Ok(pixels)
 }
 
+// ── CPU fallback (#60) ───────────────────────────────────────────────
+//
+// When Vulkan isn't available, shapes are rasterized pixel-by-pixel on
+// the CPU. No anti-aliasing (the shapes render once to a cached PNG, so
+// aliasing is tolerable), no external deps beyond std. Each shape maps to
+// a point-containment test; the same fill color is written for every
+// pixel inside the shape.
+
+/// CPU fallback: returns true if the point (px, py) is inside the shape.
+fn cpu_shape_contains(
+    kind: ShapeKind,
+    px: f64,
+    py: f64,
+    w: f64,
+    h: f64,
+) -> bool {
+    let cx = w / 2.0;
+    let cy = h / 2.0;
+    let r = w.min(h) / 2.0 - 2.0;
+    match kind {
+        ShapeKind::Rect => {
+            let cr = w.min(h) * 0.08;
+            cpu_rounded_rect_contains(px, py, 0.0, 0.0, w, h, cr)
+        }
+        ShapeKind::Circle => (px - cx).hypot(py - cy) <= r,
+        ShapeKind::Ellipse => {
+            let rx = w / 2.0 - 2.0;
+            let ry = h / 2.0 - 2.0;
+            let dx = (px - cx) / rx;
+            let dy = (py - cy) / ry;
+            dx * dx + dy * dy <= 1.0
+        }
+        ShapeKind::Star => {
+            let inner = r * 0.42;
+            let verts = cpu_star_vertices(cx, cy, 5, r, inner);
+            cpu_point_in_polygon(px, py, &verts)
+        }
+        ShapeKind::Polygon => {
+            let verts = cpu_polygon_vertices(cx, cy, 6, r);
+            cpu_point_in_polygon(px, py, &verts)
+        }
+        ShapeKind::Line => py >= cy - h.max(4.0) * 0.175 && py <= cy + h.max(4.0) * 0.175,
+        ShapeKind::Arrow => cpu_arrow_contains(px, py, w, h),
+    }
+}
+
+fn cpu_rounded_rect_contains(px: f64, py: f64, x: f64, y: f64, w: f64, h: f64, r: f64) -> bool {
+    if px < x || px > x + w || py < y || py > y + h {
+        return false;
+    }
+    // Inside the central rectangle.
+    if px >= x + r && px <= x + w - r {
+        return true;
+    }
+    if py >= y + r && py <= y + h - r {
+        return true;
+    }
+    // Corner check: distance to the nearest corner centre.
+    let (cx, cy) = if px < x + r {
+        if py < y + r {
+            (x + r, y + r)
+        } else {
+            (x + r, y + h - r)
+        }
+    } else if py < y + r {
+        (x + w - r, y + r)
+    } else {
+        (x + w - r, y + h - r)
+    };
+    (px - cx).hypot(py - cy) <= r
+}
+
+fn cpu_star_vertices(cx: f64, cy: f64, points: u32, outer: f64, inner: f64) -> Vec<(f64, f64)> {
+    (0..points * 2)
+        .map(|i| {
+            let r = if i % 2 == 0 { outer } else { inner };
+            let a =
+                std::f64::consts::PI * (i as f64) / (points as f64) - std::f64::consts::FRAC_PI_2;
+            (cx + r * a.cos(), cy + r * a.sin())
+        })
+        .collect()
+}
+
+fn cpu_polygon_vertices(cx: f64, cy: f64, sides: u32, radius: f64) -> Vec<(f64, f64)> {
+    (0..sides)
+        .map(|i| {
+            let a = 2.0 * std::f64::consts::PI * (i as f64) / (sides as f64)
+                - std::f64::consts::FRAC_PI_2;
+            (cx + radius * a.cos(), cy + radius * a.sin())
+        })
+        .collect()
+}
+
+/// Winding-number point-in-polygon test (handles self-intersecting stars).
+fn cpu_point_in_polygon(px: f64, py: f64, verts: &[(f64, f64)]) -> bool {
+    let n = verts.len();
+    let mut wn = 0i32;
+    for i in 0..n {
+        let (x0, y0) = verts[i];
+        let (x1, y1) = verts[(i + 1) % n];
+        if y0 <= py {
+            if y1 > py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) > 0.0 {
+                wn += 1;
+            }
+        } else if y1 <= py && (x1 - x0) * (py - y0) - (px - x0) * (y1 - y0) < 0.0 {
+            wn -= 1;
+        }
+    }
+    wn != 0
+}
+
+fn cpu_arrow_contains(px: f64, py: f64, w: f64, h: f64) -> bool {
+    let cy = h / 2.0;
+    let shaft = h * 0.28;
+    let head = (w * 0.28).min(h);
+    // Arrow body: shaft rectangle
+    if px >= 2.0 && px <= w - head {
+        let shalf = shaft / 2.0;
+        if py >= cy - shalf && py <= cy + shalf {
+            return true;
+        }
+    }
+    // Arrow head: triangle from (w-head, cy-h/2+2) -> (w-head, cy+h/2-2) -> (w-2, cy)
+    let verts = [
+        (w - head, cy - h / 2.0 + 2.0),
+        (w - head, cy + h / 2.0 - 2.0),
+        (w - 2.0, cy),
+    ];
+    cpu_point_in_polygon(px, py, &verts)
+}
+
+fn render_shape_rgba_cpu(
+    kind: ShapeKind,
+    fill_hex: &str,
+    width: u32,
+    height: u32,
+    rotate: f64,
+) -> Result<Vec<u8>> {
+    let argb = parse_color(fill_hex);
+    let (a, r, g, b) = (
+        ((argb >> 24) & 0xff) as u8,
+        ((argb >> 16) & 0xff) as u8,
+        ((argb >> 8) & 0xff) as u8,
+        (argb & 0xff) as u8,
+    );
+    let w = width as f64;
+    let h = height as f64;
+    let cx = w / 2.0;
+    let cy = h / 2.0;
+    let cos_rot = (-rotate).cos();
+    let sin_rot = (-rotate).sin();
+
+    let mut pixels = vec![0u8; (width * height * 4) as usize];
+    for py in 0..height {
+        for px in 0..width {
+            // Apply inverse rotation so we test the un-rotated shape.
+            let (fx, fy) = if rotate != 0.0 {
+                let dx = (px as f64 + 0.5) - cx;
+                let dy = (py as f64 + 0.5) - cy;
+                (cx + dx * cos_rot - dy * sin_rot, cy + dx * sin_rot + dy * cos_rot)
+            } else {
+                (px as f64 + 0.5, py as f64 + 0.5)
+            };
+            if cpu_shape_contains(kind, fx, fy, w, h) {
+                let idx = (py * width + px) as usize * 4;
+                pixels[idx] = r;
+                pixels[idx + 1] = g;
+                pixels[idx + 2] = b;
+                pixels[idx + 3] = a;
+            }
+        }
+    }
+    Ok(pixels)
+}
+
 /// Rasterize a shape to a transparent PNG in `cache_dir`, returning its
 /// path. Cached by shape/fill/size.
 pub fn shape_png(
@@ -312,24 +502,8 @@ pub fn shape_png_maybe_inverted(
 mod tests {
     use super::*;
 
-    /// Every test skips cleanly (rather than failing) if this host has no
-    /// usable Vulkan/GPU adapter -- `gpu()` returning `None` is a real,
-    /// already-handled outcome (`render_shape_rgba` turns it into a
-    /// contextualized `Err`, not a panic), not something these tests exist
-    /// to re-litigate. What they actually check is the raster's *content*
-    /// once rendering succeeds.
-    macro_rules! skip_if_no_gpu {
-        ($result:expr) => {
-            match $result {
-                Ok(v) => v,
-                Err(e) if e.to_string().contains("no GPU") => {
-                    eprintln!("skipping: {e}");
-                    return;
-                }
-                Err(e) => panic!("unexpected error: {e:#}"),
-            }
-        };
-    }
+    /// Every test should succeed regardless of GPU availability (#60):
+    /// Vello is tried first, CPU fallback runs when Vulkan isn't present.
 
     fn tmp_cache(name: &str) -> std::path::PathBuf {
         let dir = std::env::temp_dir().join(format!("dualcut-vector-test-{name}"));
@@ -340,7 +514,7 @@ mod tests {
     #[test]
     fn shape_png_has_the_requested_dimensions() {
         let cache = tmp_cache("dims");
-        let path = skip_if_no_gpu!(shape_png(&cache, ShapeKind::Rect, "#ff0000", 64, 32));
+        let path = shape_png(&cache, ShapeKind::Rect, "#ff0000", 64, 32).unwrap();
         let img = image::open(&path).expect("valid png").to_rgba8();
         assert_eq!((img.width(), img.height()), (64, 32));
         let _ = std::fs::remove_dir_all(&cache);
@@ -349,7 +523,7 @@ mod tests {
     #[test]
     fn rect_shape_fills_the_whole_canvas_opaquely() {
         let cache = tmp_cache("rect-fill");
-        let path = skip_if_no_gpu!(shape_png(&cache, ShapeKind::Rect, "#ff0000", 40, 40));
+        let path = shape_png(&cache, ShapeKind::Rect, "#ff0000", 40, 40).unwrap();
         let img = image::open(&path).expect("valid png").to_rgba8();
         // A rect shape has no margin, so even a corner pixel should be
         // opaque and roughly the requested red.
@@ -362,7 +536,7 @@ mod tests {
     #[test]
     fn circle_shape_is_transparent_outside_the_circle() {
         let cache = tmp_cache("circle-corner");
-        let path = skip_if_no_gpu!(shape_png(&cache, ShapeKind::Circle, "#00ff00", 60, 60));
+        let path = shape_png(&cache, ShapeKind::Circle, "#00ff00", 60, 60).unwrap();
         let img = image::open(&path).expect("valid png").to_rgba8();
         // A circle inscribed in a square canvas never reaches the
         // corners -- unlike Rect, this actually distinguishes shape logic
@@ -377,7 +551,7 @@ mod tests {
     #[test]
     fn invert_swaps_painted_and_unpainted_regions() {
         let cache = tmp_cache("invert");
-        let normal = skip_if_no_gpu!(shape_png_maybe_inverted(
+        let normal = shape_png_maybe_inverted(
             &cache,
             ShapeKind::Circle,
             "#0000ff",
@@ -385,8 +559,8 @@ mod tests {
             60,
             0.0,
             false
-        ));
-        let inverted = skip_if_no_gpu!(shape_png_maybe_inverted(
+        ).unwrap();
+        let inverted = shape_png_maybe_inverted(
             &cache,
             ShapeKind::Circle,
             "#0000ff",
@@ -394,7 +568,7 @@ mod tests {
             60,
             0.0,
             true
-        ));
+        ).unwrap();
         let normal = image::open(&normal).expect("valid png").to_rgba8();
         let inverted = image::open(&inverted).expect("valid png").to_rgba8();
         // Center (inside the circle): opaque normally, transparent inverted.
@@ -409,7 +583,7 @@ mod tests {
     #[test]
     fn feathering_softens_the_edge_instead_of_a_hard_cutoff() {
         let cache = tmp_cache("feather");
-        let sharp = skip_if_no_gpu!(shape_png_maybe_inverted(
+        let sharp = shape_png_maybe_inverted(
             &cache,
             ShapeKind::Circle,
             "#ffffff",
@@ -417,8 +591,8 @@ mod tests {
             80,
             0.0,
             false
-        ));
-        let soft = skip_if_no_gpu!(shape_png_maybe_inverted(
+        ).unwrap();
+        let soft = shape_png_maybe_inverted(
             &cache,
             ShapeKind::Circle,
             "#ffffff",
@@ -426,7 +600,7 @@ mod tests {
             80,
             8.0,
             false
-        ));
+        ).unwrap();
         let sharp = image::open(&sharp).expect("valid png").to_rgba8();
         let soft = image::open(&soft).expect("valid png").to_rgba8();
         // Scan outward from the center along one row; the feathered
@@ -448,10 +622,10 @@ mod tests {
     #[test]
     fn results_are_cached_by_content_not_regenerated() {
         let cache = tmp_cache("cache");
-        let first = skip_if_no_gpu!(shape_png(&cache, ShapeKind::Star, "#123456", 32, 32));
+        let first = shape_png(&cache, ShapeKind::Star, "#123456", 32, 32).unwrap();
         let mtime1 = std::fs::metadata(&first).unwrap().modified().unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
-        let second = skip_if_no_gpu!(shape_png(&cache, ShapeKind::Star, "#123456", 32, 32));
+        let second = shape_png(&cache, ShapeKind::Star, "#123456", 32, 32).unwrap();
         let mtime2 = std::fs::metadata(&second).unwrap().modified().unwrap();
         assert_eq!(first, second, "identical params should reuse the same cache path");
         assert_eq!(mtime1, mtime2, "second call should not have rewritten the file");
@@ -461,8 +635,8 @@ mod tests {
     #[test]
     fn different_shapes_produce_different_cache_files() {
         let cache = tmp_cache("distinct");
-        let rect = skip_if_no_gpu!(shape_png(&cache, ShapeKind::Rect, "#ffffff", 32, 32));
-        let circle = skip_if_no_gpu!(shape_png(&cache, ShapeKind::Circle, "#ffffff", 32, 32));
+        let rect = shape_png(&cache, ShapeKind::Rect, "#ffffff", 32, 32).unwrap();
+        let circle = shape_png(&cache, ShapeKind::Circle, "#ffffff", 32, 32).unwrap();
         assert_ne!(rect, circle);
         let _ = std::fs::remove_dir_all(&cache);
     }
