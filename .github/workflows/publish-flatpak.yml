@@ -1,0 +1,118 @@
+name: Publish Flatpak (tuna-os remote)
+
+# Builds the same manifest flatpak.yml uses for GitHub Release bundles,
+# but exports it as an OCI image and publishes it to ghcr.io/tuna-os/dualcut
+# + the central index in tuna-os/docs, so `flatpak install tuna-os
+# io.github.hanthor.Dualcut` works after `flatpak remote-add tuna-os
+# https://tunaos.org/flatpak/tuna-os.flatpakrepo`. See tuna-os/flatpak-index.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  build-oci:
+    name: Build & export OCI (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runs-on: ubuntu-latest
+          - arch: aarch64
+            runs-on: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runs-on }}
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Generate offline cargo sources
+        run: |
+          pip3 install --break-system-packages aiohttp toml || pip3 install aiohttp toml
+          curl -fsSLo /tmp/flatpak-cargo-generator.py \
+            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+          python3 /tmp/flatpak-cargo-generator.py engine/Cargo.lock \
+            -o engine/build-aux/cargo-sources.json
+
+      - name: Build
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.7
+        with:
+          manifest-path: engine/build-aux/io.github.hanthor.Dualcut.json
+          cache-key: flatpak-builder-oci-${{ matrix.arch }}-${{ hashFiles('engine/Cargo.lock', 'engine/build-aux/*.json') }}
+          arch: ${{ matrix.arch }}
+          build-bundle: false
+          upload-artifact: false
+
+      - name: Export OCI
+        run: |
+          flatpak build-bundle --oci --arch=${{ matrix.arch }} \
+            repo dualcut-${{ matrix.arch }}.oci io.github.hanthor.Dualcut
+
+      - name: Upload OCI artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: dualcut-oci-${{ matrix.arch }}
+          path: dualcut-${{ matrix.arch }}.oci/
+          retention-days: 1
+
+  publish:
+    name: Publish to GHCR + update index
+    needs: build-oci
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dualcut-oci-x86_64
+          path: dualcut-oci-x86_64
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: dualcut-oci-aarch64
+          path: dualcut-oci-aarch64
+
+      - name: Push OCI to GHCR
+        run: |
+          echo "${{ secrets.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
+          skopeo copy oci:dualcut-oci-x86_64 docker://ghcr.io/tuna-os/dualcut:latest-x86_64
+          skopeo copy oci:dualcut-oci-aarch64 docker://ghcr.io/tuna-os/dualcut:latest-aarch64
+
+      - name: Update central index (tuna-os/docs)
+        env:
+          FLATPAK_INDEX_TOKEN: ${{ secrets.FLATPAK_INDEX_TOKEN }}
+        run: |
+          git clone --depth 1 \
+            "https://x-access-token:${FLATPAK_INDEX_TOKEN}@github.com/tuna-os/docs.git" \
+            index-repo
+          pip install requests
+
+          python3 .github/scripts/update-index.py \
+            --oci-dir dualcut-oci-x86_64 \
+            --index-file index-repo/static/flatpak/index/static \
+            --repo-name tuna-os/dualcut \
+            --tags latest
+
+          python3 .github/scripts/update-index.py \
+            --oci-dir dualcut-oci-aarch64 \
+            --index-file index-repo/static/flatpak/index/static \
+            --repo-name tuna-os/dualcut \
+            --tags latest
+
+          cd index-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add static/flatpak/index/static
+          if git diff --cached --quiet; then
+            echo "No index changes"
+          else
+            git commit -m "chore(flatpak): update Dualcut OCI index [${{ github.ref_name }}]"
+            git push origin main
+          fi

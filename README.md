@@ -11,16 +11,28 @@ HTTP API for agents) — every surface stays in sync while the app runs.
 
 **[📘 User Guide](docs/USER_GUIDE.md)** — screenshots regenerated automatically on every release.
 
-**Install / update (Flatpak):**
+**Install (Flatpak, via the TunaOS remote):**
+
+```sh
+flatpak remote-add --if-not-exists tuna-os https://tunaos.org/flatpak/tuna-os.flatpakrepo
+flatpak install tuna-os io.github.hanthor.Dualcut
+
+flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json
+```
+
+Updates land automatically (`flatpak update`) whenever a new `v*` tag ships.
+
+<details>
+<summary>Install a specific release bundle directly (no remote)</summary>
 
 ```sh
 # x86_64
 curl -LO https://github.com/tuna-os/dualcut/releases/latest/download/dualcut.flatpak && flatpak install --user --reinstall -y dualcut.flatpak
 # aarch64
 curl -LO https://github.com/tuna-os/dualcut/releases/latest/download/dualcut-aarch64.flatpak && flatpak install --user --reinstall -y dualcut-aarch64.flatpak
-
-flatpak run io.github.hanthor.Dualcut ~/Videos/myproject.json
 ```
+
+</details>
 
 ## How it works
 
