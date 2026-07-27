@@ -1221,7 +1221,6 @@ impl Editor {
         ruler.set_content_width((project.duration() * pps) as i32 + 40);
         {
             let project = project.clone();
-            let pipeline = self.state.borrow().pipeline.clone();
             let this = self.clone();
             ruler.set_draw_func(move |_, cr, w, h| {
                 let (w, h) = (w as f64, h as f64);
@@ -1243,8 +1242,9 @@ impl Editor {
                     cr.set_font_size(11.0);
                     let _ = cr.show_text(&format!("{label} · {:.1}s", scene.duration));
                 }
-                // Playhead.
-                if let Some(pos) = pipeline.query_position::<gst::ClockTime>() {
+                // Playhead -- read the current pipeline live rather than a
+                // stale clone captured at widget-creation time (#57).
+                if let Some(pos) = this.state.borrow().pipeline.query_position::<gst::ClockTime>() {
                     let x = pos.nseconds() as f64 / 1e9 * pps;
                     if x <= w {
                         cr.set_source_rgb(0.95, 0.25, 0.25);
