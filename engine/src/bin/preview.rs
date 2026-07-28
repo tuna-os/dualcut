@@ -4161,6 +4161,28 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     init()?;
     gstgtk4::plugin_register_static().context("registering gtk4paintablesink")?;
 
+    // Show a loading window while the project file is being parsed and
+    // compiled — large projects can take 30s–1min with no feedback.
+    let loading = adw::Window::builder()
+        .title("Dualcut")
+        .default_width(360)
+        .default_height(180)
+        .resizable(false)
+        .deletable(false)
+        .build();
+    let spinner = gtk::Spinner::new();
+    spinner.start();
+    spinner.set_size_request(48, 48);
+    let label = gtk::Label::new(Some("Opening project\u{2026}"));
+    label.add_css_class("title-4");
+    let loading_content = gtk::Box::new(gtk::Orientation::Vertical, 12);
+    loading_content.set_valign(gtk::Align::Center);
+    loading_content.set_halign(gtk::Align::Center);
+    loading_content.append(&spinner);
+    loading_content.append(&label);
+    loading.set_child(Some(&loading_content));
+    loading.present();
+
     let arg = std::env::args().nth(1);
     let (timeline, project, project_path, duration) = match &arg {
         Some(path) if path.ends_with(".json") => {
@@ -5478,6 +5500,8 @@ fn build_ui(app: &adw::Application) -> Result<()> {
         });
         window.add_controller(drop);
     }
+
+    loading.close();
 
     window.present();
     start_paused(&pipeline)?;
