@@ -16,7 +16,7 @@ jobs:
       - name: Install git first
         run: dnf install -y -q git
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Schema/types in sync with the bundled agent skill (#49)
         # No diffutils in the bare container image yet (toolchain install
