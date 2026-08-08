@@ -30,7 +30,7 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - name: Generate offline cargo sources
         run: |
@@ -71,7 +71,7 @@ jobs:
       - name: Install git first
         run: dnf install -y -q git
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: main
 
