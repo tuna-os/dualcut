@@ -9,6 +9,10 @@
     {
       "matchUpdateTypes": ["major", "minor", "patch", "pin", "digest"],
       "automerge": true
+    },
+    {
+      "matchPackageNames": ["serde"],
+      "allowedVersions": "<1.0.228"
     }
   ]
 }
