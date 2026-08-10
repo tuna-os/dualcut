@@ -117,7 +117,9 @@ fn make_pipeline(timeline: &ges::Timeline) -> Result<(ges::Pipeline, gtk::gdk::P
 
 fn start_paused(pipeline: &ges::Pipeline) -> Result<()> {
     if pipeline.set_state(gst::State::Paused).is_err() {
-        let _ = pipeline.set_state(gst::State::Null);
+        if let Err(e) = pipeline.set_state(gst::State::Null) {
+            eprintln!("start_paused: pipeline Null reset failed: {e}");
+        }
         if let Ok(fake) = gst::ElementFactory::make("fakesink").build() {
             pipeline.preview_set_audio_sink(Some(&fake));
         }
@@ -5184,7 +5186,9 @@ fn build_ui(app: &adw::Application) -> Result<()> {
                         .map(|p| p.nseconds() as f64 / 1e9)
                         .unwrap_or(0.0);
                     let step = if action == keys::Action::StepBack { -1.0 } else { 1.0 } / fps;
-                    let _ = pipeline.set_state(gst::State::Paused);
+                    if let Err(e) = pipeline.set_state(gst::State::Paused) {
+                        eprintln!("playback: step pause failed: {e}");
+                    }
                     seek_to(&pipeline, (pos + step).max(0.0));
                 }
                 keys::Action::GoStart => seek_to(&pipeline, 0.0),
@@ -5658,6 +5662,53 @@ mod pipeline_tests {
         // all miss, exercising the "proxies not built yet" fallback.
         let (project, base_dir) = empty_project(&dir);
         assert!(compile_project(&project, &base_dir).is_ok());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Test-table row 1 (#57): transitioning a properly-prerolled
+    /// pipeline from Paused to Playing and back must succeed and return
+    /// the correct state-change result -- this is the path the play
+    /// button, spacebar, and arrow-key handlers exercise hundreds of
+    /// times per editing session.
+    #[test]
+    fn set_state_playing_from_paused_succeeds_for_normal_pipeline() {
+        let _guard = lock();
+        init_once();
+        let dir = std::env::temp_dir().join("dualcut-pipeline-test-playing");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (project, base_dir) = empty_project(&dir);
+        let timeline = compile_project(&project, &base_dir).expect("compiles");
+        let (pipeline, _paintable) = make_pipeline(&timeline).expect("pipeline builds");
+        start_paused(&pipeline).expect("normal project preroolls");
+        // Transition Paused → Playing must succeed.
+        assert!(pipeline.set_state(gst::State::Playing).is_ok());
+        // Transition Playing → Paused must also succeed.
+        assert!(pipeline.set_state(gst::State::Paused).is_ok());
+        let _ = pipeline.set_state(gst::State::Null);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Test-table row 2 (#57): `start_paused`, teardown via
+    /// `set_state(Null)`, and a second `start_paused` must all succeed
+    /// without error -- this is the cycle that `swap_pipeline` and
+    /// `rebuild` perform on every document edit. A regression here means
+    /// the preview silently dies after the first edit.
+    #[test]
+    fn start_paused_null_start_paused_cycle_succeeds() {
+        let _guard = lock();
+        init_once();
+        let dir = std::env::temp_dir().join("dualcut-pipeline-test-cycle");
+        std::fs::create_dir_all(&dir).unwrap();
+        let (project, base_dir) = empty_project(&dir);
+        let timeline = compile_project(&project, &base_dir).expect("compiles");
+        let (pipeline, _paintable) = make_pipeline(&timeline).expect("pipeline builds");
+        start_paused(&pipeline).expect("first preroll");
+        let _ = pipeline.set_state(gst::State::Null);
+        // Position must vanish after Null reset (the stuck-timestamp bug
+        // in #57 depended on this invariant holding).
+        assert!(pipeline.query_position::<gst::ClockTime>().is_none());
+        start_paused(&pipeline).expect("second preroll after Null");
+        let _ = pipeline.set_state(gst::State::Null);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
