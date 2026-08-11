@@ -5061,8 +5061,9 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     // user drag the handle all the way to 0, losing the sidebar entirely.
     // Clamp the *manual* drag to a floor without reintroducing #44: this
     // only rejects positions past the limit, it never demands extra width.
+    // Floor bumped to 400px per maintainer request (see #62 follow-up).
     {
-        const MIN_SIDEBAR_WIDTH: i32 = 200;
+        const MIN_SIDEBAR_WIDTH: i32 = 400;
         // Re-entrancy guard: set_position() below re-triggers this same
         // notify::position handler synchronously (observed hanging the
         // #44 regression-check walkthrough step, which stacks wide effect
