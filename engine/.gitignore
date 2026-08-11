@@ -2,3 +2,6 @@
 /out
 /assets
 .dualcut-cache/
+
+# X Window Dump captures from scripts/walkthrough.sh (raw frames, never track)
+*.xwd
