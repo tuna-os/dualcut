@@ -31,10 +31,7 @@ use std::time::SystemTime;
 
 mod captions;
 
-use captions::{
-    BUNDLED_WHISPER_CLI, BUNDLED_WHISPER_MODEL, find_whisper, find_whisper_model,
-    parse_whisper_segments, run_captions_job,
-};
+use captions::{find_whisper, find_whisper_model, run_captions_job};
 
 const DEFAULT_PPS: f64 = 42.0;
 /// Fixed width of a timeline lane's icon+label+toggles column. Shared by
