@@ -34,6 +34,15 @@ mod captions;
 
 use captions::{find_whisper, find_whisper_model, run_captions_job};
 
+#[path = "preview/prefs.rs"]
+mod prefs;
+
+use prefs::{
+    apply_default_font_family, load_recents, prefs_default_font_family, prefs_file, prefs_set,
+    prefs_set_default_font_family, prefs_set_preview_scale, prefs_set_show_script,
+    prefs_set_use_proxies, prefs_show_script, prefs_use_proxies, preview_scale, remember_recent,
+};
+
 const DEFAULT_PPS: f64 = 42.0;
 /// Fixed width of a timeline lane's icon+label+toggles column. Shared by
 /// every lane row and the ruler's leading spacer so the ruler's time
@@ -131,80 +140,6 @@ fn start_paused(pipeline: &ges::Pipeline) -> Result<()> {
         pipeline.set_state(gst::State::Paused).context("pausing pipeline")?;
     }
     Ok(())
-}
-
-fn preview_scale() -> f64 {
-    std::fs::read_to_string(prefs_file())
-        .ok()
-        .and_then(|s| {
-            s.lines().find_map(|l| l.trim().strip_prefix("preview_scale=").map(str::to_string))
-        })
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0.5)
-}
-
-fn prefs_set_preview_scale(value: f64) {
-    prefs_set("preview_scale", &value.to_string());
-}
-
-/// Font family used for new text objects and built-in templates (#61).
-/// Every built-in font spec (starter templates, `Element::Text` defaults)
-/// is a Pango description with family "Sans" -- swapping just that prefix
-/// is enough without needing a real Pango-description parser.
-fn prefs_default_font_family() -> String {
-    std::fs::read_to_string(prefs_file())
-        .ok()
-        .and_then(|s| {
-            s.lines().find_map(|l| l.trim().strip_prefix("default_font_family=").map(str::to_string))
-        })
-        .filter(|s| !s.is_empty())
-        .unwrap_or_else(|| "Sans".to_string())
-}
-
-fn prefs_set_default_font_family(value: &str) {
-    prefs_set("default_font_family", value);
-}
-
-/// Rewrite a Pango font description's family to the configured default,
-/// e.g. "Sans Bold 32" -> "Verdana Bold 32". No-op for specs that don't
-/// start with the "Sans" family this codebase's built-in fonts all use.
-fn apply_default_font_family(spec: &str) -> String {
-    let family = prefs_default_font_family();
-    if family == "Sans" {
-        return spec.to_string();
-    }
-    match spec.strip_prefix("Sans") {
-        Some(rest) => format!("{family}{rest}"),
-        None => spec.to_string(),
-    }
-}
-
-/// Preview-only proxy media (960px MJPEG transcodes) — on unless disabled.
-fn prefs_use_proxies() -> bool {
-    std::fs::read_to_string(prefs_file())
-        .map(|s| !s.lines().any(|l| l.trim() == "use_proxies=false"))
-        .unwrap_or(true)
-}
-
-fn prefs_set_use_proxies(value: bool) {
-    prefs_set("use_proxies", &value.to_string());
-}
-
-/// Rewrite one `key=value` line in the prefs file, preserving every other key.
-fn prefs_set(key: &str, value: &str) {
-    let file = prefs_file();
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let prefix = format!("{key}=");
-    let mut lines: Vec<String> = std::fs::read_to_string(&file)
-        .unwrap_or_default()
-        .lines()
-        .filter(|l| !l.trim().is_empty() && !l.trim().starts_with(&prefix))
-        .map(str::to_string)
-        .collect();
-    lines.push(format!("{key}={value}"));
-    let _ = std::fs::write(&file, lines.join("\n") + "\n");
 }
 
 /// Customizable keyboard shortcuts, with presets matching other editors'
@@ -3370,50 +3305,6 @@ fn media_uri(src: &str, base_dir: &std::path::Path) -> Option<String> {
         return Some(src.to_string());
     }
     base_dir.join(src).canonicalize().ok().map(|p| format!("file://{}", p.display()))
-}
-
-fn prefs_file() -> PathBuf {
-    glib::user_config_dir().join("dualcut").join("prefs")
-}
-
-fn prefs_show_script() -> bool {
-    std::fs::read_to_string(prefs_file())
-        .map(|s| s.lines().any(|l| l.trim() == "show_script=true"))
-        .unwrap_or(false)
-}
-
-fn prefs_set_show_script(value: bool) {
-    prefs_set("show_script", &value.to_string());
-}
-
-fn recents_file() -> PathBuf {
-    glib::user_config_dir().join("dualcut").join("recent-projects")
-}
-
-fn load_recents() -> Vec<PathBuf> {
-    std::fs::read_to_string(recents_file())
-        .unwrap_or_default()
-        .lines()
-        .map(PathBuf::from)
-        .filter(|p| p.exists())
-        .take(8)
-        .collect()
-}
-
-fn remember_recent(path: &std::path::Path) {
-    let mut entries = load_recents();
-    entries.retain(|p| p != path);
-    entries.insert(0, path.to_path_buf());
-    entries.truncate(8);
-    let file = recents_file();
-    if let Some(dir) = file.parent() {
-        let _ = std::fs::create_dir_all(dir);
-    }
-    let _ = std::fs::write(
-        &file,
-        entries.iter().map(|p| p.display().to_string()).collect::<Vec<_>>().join("
-"),
-    );
 }
 
 /// Locate the bundled agent skill directory (flatpak install or repo).
