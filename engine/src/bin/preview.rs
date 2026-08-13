@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::SystemTime;
 
+#[path = "preview/captions.rs"]
 mod captions;
 
 use captions::{find_whisper, find_whisper_model, run_captions_job};
