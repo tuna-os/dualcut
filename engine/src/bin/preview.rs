@@ -5791,5 +5791,4 @@ mod pure_tests {
         let base = std::env::temp_dir();
         assert_eq!(media_uri("this-file-does-not-exist-anywhere.mp4", &base), None);
     }
-
-    #[test]
+}
