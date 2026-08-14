@@ -17,6 +17,22 @@
       "automerge": true
     },
     {
+      "description": "fedora base image major bumps are IGNORED (not even proposed): the fedora:46/rawhide image's dnf repos serve fc45-built packages with a keyring mismatch, breaking container builds (same upstream defect as tuna-os/tacklebox#205, tuna-os/bluefin-cli#167). automerge:false alone did not stop renovate elsewhere; ignore prevents PR creation entirely. Remove this rule once the upstream image is consistent.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "matchPackageNames": [
+        "quay.io/fedora/fedora",
+        "registry.fedoraproject.org/fedora",
+        "quay.io/fedora/fedora-bootc"
+      ],
+      "matchUpdateTypes": [
+        "major"
+      ],
+      "automerge": false,
+      "ignore": true
+    },
+    {
       "matchPackageNames": [
         "serde"
       ],
