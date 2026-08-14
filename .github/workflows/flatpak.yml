@@ -62,7 +62,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     container:
-      image: quay.io/fedora/fedora:45
+      image: quay.io/fedora/fedora:46
     permissions:
       contents: write
     steps:
