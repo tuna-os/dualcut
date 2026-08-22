@@ -49,7 +49,9 @@ sudo dnf install -y cargo rust clippy gtk4-devel libadwaita-devel \
   xorg-x11-server-Xvfb xset xz
 ```
 
-(CI runs inside a Fedora 44 container with exactly this set.)
+CI runs inside a Fedora 45 container. See
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) for the authoritative
+package list and validation commands.
 
 ## Making a change
 

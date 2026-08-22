@@ -23,7 +23,9 @@ detached audio. The answer to "what doesn't fit the scene model".
 
 **Def / template** — a reusable, parameterised set of clips stored in
 `defs`, instantiated by a `compref` clip with `args`. `{param}`
-placeholders substitute in string fields. Defs cannot (yet) nest.
+placeholders substitute in string fields. Defs may nest, but reference
+cycles are rejected. The editor's *Save as template* action cannot create a
+def from a selection that already contains a template instance.
 Built-ins ship in `engine/templates/starter.json`.
 
 **Clip** — one timed element on a lane: `text`, `video`, `audio`,
