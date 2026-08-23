@@ -77,8 +77,11 @@ Clip: `{ id, start, duration, type, …element fields, transform?, animations?, 
 - `duration: 0` on a scene layer = fill the rest of the scene
 
 Rules: unique ids everywhere; scenes need `duration > 0`; `compref` targets
-must exist in `defs`; defs cannot (yet) reference other defs. Audio policy:
-a video clip's own audio is scene-local; music/VO belongs on overlays.
+must exist in `defs`; nested defs must not form a reference cycle. The
+*Save as template* action cannot create a def from a selection that already
+contains a `compref`, even though hand-authored nested defs are valid.
+Audio policy: a video clip's own audio is scene-local; music/VO belongs on
+overlays.
 "Detach audio" = set the video clip's `volume: 0` and add an `audio` clip
 with the same `src`/`offset` wherever you want it.
 
