@@ -146,6 +146,14 @@ class TestCreate:
         assert data["Registry"] == "https://ghcr.io/example"
         assert data["Results"][0]["Images"][0]["Tags"] == ["stable", "edge"]
 
+    def test_custom_registry_with_scheme(self, tmp_path):
+        oci = make_oci_layout(tmp_path, labels=flatpak_labels())
+        index = tmp_path / "index.json"
+        res = run_script(oci, index, "tuna-os/dualcut", registry="https://ghcr.io/example")
+        assert res.returncode == 0, res.stderr
+        data = json.loads(index.read_text())
+        assert data["Registry"] == "https://ghcr.io/example"
+
 
 # ── update semantics (the two publish invocations) ─────────────────────────
 

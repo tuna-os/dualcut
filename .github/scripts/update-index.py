@@ -57,12 +57,18 @@ def main():
             raise ValueError(f"Missing required label: {label}")
 
     # 5. Load or initialize target index/static
+    registry = args.registry
+    if registry.startswith("https://"):
+        registry = registry[len("https://"):]
+    elif registry.startswith("http://"):
+        registry = registry[len("http://"):]
+
     if index_file.exists():
         with open(index_file) as f:
             index_data = json.load(f)
     else:
         index_data = {
-            "Registry": f"https://{args.registry}",
+            "Registry": f"https://{registry}",
             "Results": []
         }
 
