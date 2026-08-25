@@ -8,6 +8,10 @@ use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
+mod traversal;
+
+pub use traversal::{find_clip, find_clip_mut, remove_clip};
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub meta: Meta,
@@ -631,41 +635,6 @@ pub fn parse_color(color: &str) -> u32 {
         0xff00_0000 | value
     } else {
         value
-    }
-}
-
-/// Find a clip anywhere in the project by id.
-pub fn find_clip<'a>(project: &'a Project, id: &str) -> Option<&'a Clip> {
-    project
-        .scenes
-        .iter()
-        .flat_map(|s| s.layers.iter())
-        .chain(project.overlays.iter().flat_map(|t| t.clips.iter()))
-        .find(|c| c.id == id)
-}
-
-pub fn find_clip_mut<'a>(project: &'a mut Project, id: &str) -> Option<&'a mut Clip> {
-    let in_scene = project
-        .scenes
-        .iter_mut()
-        .flat_map(|s| s.layers.iter_mut())
-        .find(|c| c.id == id);
-    if in_scene.is_some() {
-        return in_scene;
-    }
-    project
-        .overlays
-        .iter_mut()
-        .flat_map(|t| t.clips.iter_mut())
-        .find(|c| c.id == id)
-}
-
-pub fn remove_clip(project: &mut Project, id: &str) {
-    for scene in &mut project.scenes {
-        scene.layers.retain(|c| c.id != id);
-    }
-    for track in &mut project.overlays {
-        track.clips.retain(|c| c.id != id);
     }
 }
 
