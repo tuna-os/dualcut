@@ -8,7 +8,7 @@ This roadmap tracks product outcomes rather than feature volume. Detailed
 capability comparisons live in [PARITY.md](PARITY.md), architectural decisions
 in [docs/adr/](docs/adr/), and implementation work in GitHub issues.
 
-## Current state — August 2026
+## Current state
 
 The native Rust/GStreamer rewrite is substantially shipped:
 
@@ -20,8 +20,7 @@ The native Rust/GStreamer rewrite is substantially shipped:
 - x86_64 and aarch64 Flatpaks are built by CI for GitHub Releases and the
   TunaOS Flatpak remote.
 
-The latest published release is `v0.27.1` (2026-07-27). `main` contains later
-runtime, UI, licensing, dependency, documentation, and release-maintenance
+`main` contains ongoing runtime, UI, licensing, dependency, documentation, and release-maintenance
 changes. Because both advertised installation channels are tag-driven,
 release currency is the immediate adoption priority.
 
