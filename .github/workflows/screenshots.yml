@@ -1,0 +1,117 @@
+name: screenshots
+
+# Regenerate the user-guide screenshots from the real app and commit them.
+#
+# scripts/walkthrough.sh already existed and already did the hard part -- it
+# drives the app's DUALCUT_WALKTHROUGH mode under Xvfb and grabs a frame per
+# "WALKTHROUGH-SHOT <name>" marker -- but nothing ran it. The images under
+# docs/guide/ were produced by hand, so they drift from the UI silently, and
+# several of them were captured on a machine without the GStreamer codecs:
+# they carry a "clip ... isn't decodable on this GStreamer install" error
+# toast across the bottom. Those are also the images software centres show.
+#
+# Running it here fixes both: the pictures track the code, and the container
+# installs the same full plugin set ci.yml uses, so the toast does not appear.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "engine/src/**"
+      - "engine/examples/**"
+      - "scripts/walkthrough.sh"
+      - ".github/workflows/screenshots.yml"
+  pull_request:
+    paths:
+      - "engine/src/**"
+      - "scripts/walkthrough.sh"
+      - ".github/workflows/screenshots.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: capture
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/fedora/fedora:45
+    permissions:
+      contents: write
+    steps:
+      # checkout degrades to a tarball without git in the container.
+      - name: Install git first
+        run: dnf install -y -q git
+
+      - uses: actions/checkout@v7
+
+      # Same list ci.yml installs. The gstreamer1-plugins-* and
+      # gstreamer1-plugin-libav packages are the ones that keep the codec
+      # error toast out of the captures.
+      - name: Install toolchain + runtime
+        run: |
+          dnf install -y -q cargo rust clang-devel pkgconf-pkg-config \
+            gtk4-devel libadwaita-devel gstreamer1-devel \
+            gstreamer1-plugins-base-devel gst-editing-services-devel \
+            gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+            gstreamer1-plugins-base-tools gstreamer1-plugins-good-extras \
+            gstreamer1-plugin-libav \
+            mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
+          git config --global --add safe.directory "$(pwd)"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+
+      # Clear the committed images BEFORE the build, not after. If the build
+      # fails, the capture step is skipped and an unconditional upload would
+      # publish the previous run's committed PNGs as though they were this
+      # run's -- the same trap tuna-installer-kde's workflow documents having
+      # fallen into.
+      - name: Drop committed images so only this run's output ships
+        run: rm -rf docs/guide
+
+      - name: Build app binary
+        working-directory: engine
+        run: cargo build --features preview,scripting,vector
+
+      - name: Capture walkthrough
+        run: |
+          scripts/walkthrough.sh engine/target/debug/preview
+          test -s docs/guide/editor-overview.png
+
+      # Fail rather than commit a picture with an error banner in it: these
+      # images are what a software centre shows, and this exact toast is why
+      # only two of the nine hand-made captures were usable.
+      - name: Reject captures carrying an error toast
+        run: |
+          dnf install -y -q tesseract || echo "::notice::tesseract unavailable, skipping OCR check"
+          if command -v tesseract >/dev/null; then
+            fail=0
+            for png in docs/guide/*.png; do
+              if tesseract "$png" - 2>/dev/null | grep -qiE "isn't decodable|missing plugin|unsupported codec"; then
+                echo "::error::$png contains a codec error toast"
+                fail=1
+              fi
+            done
+            [ "$fail" -eq 0 ]
+          fi
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: guide-screenshots
+          path: docs/guide/
+
+      - name: Commit refreshed screenshots
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/guide
+          if git diff --cached --quiet; then echo "screenshots unchanged"; exit 0; fi
+          git commit -m "docs: refresh guide screenshots [skip ci]"
+          git pull --rebase origin main
+          git push
