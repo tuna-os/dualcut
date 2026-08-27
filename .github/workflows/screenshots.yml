@@ -47,9 +47,20 @@ jobs:
 
       - uses: actions/checkout@v7
 
-      # Same list ci.yml installs. The gstreamer1-plugins-* and
-      # gstreamer1-plugin-libav packages are the ones that keep the codec
-      # error toast out of the captures.
+      # ci.yml's list, plus xwd. The gstreamer1-plugins-* and
+      # gstreamer1-plugin-libav packages are what keep the codec error toast
+      # out of the captures.
+      #
+      # xwd is needed here but not by ci.yml: walkthrough.sh grabs each frame
+      # with xwd, which ci.yml never runs. Without it the app starts, walks
+      # every screen and emits its WALKTHROUGH-SHOT markers, and every single
+      # grab fails with "xwd: command not found" -- exactly what the first run
+      # of this workflow did.
+      #
+      # The package is plain "xwd", not xorg-x11-apps: Fedora split that
+      # megapackage into per-utility packages, and xorg-x11-apps no longer
+      # exists (checked against Fedora's package index for f44 and rawhide,
+      # which have xwd 1.0.9 and 1.0.10 and no xorg-x11-apps at all).
       - name: Install toolchain + runtime
         run: |
           dnf install -y -q cargo rust clang-devel pkgconf-pkg-config \
@@ -58,7 +69,8 @@ jobs:
             gstreamer1-plugins-good gstreamer1-plugins-bad-free \
             gstreamer1-plugins-base-tools gstreamer1-plugins-good-extras \
             gstreamer1-plugin-libav \
-            mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
+            mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz \
+            xwd
           git config --global --add safe.directory "$(pwd)"
 
       - uses: Swatinem/rust-cache@v2
@@ -77,10 +89,30 @@ jobs:
         working-directory: engine
         run: cargo build --features preview,scripting,vector
 
+      # Check the capture tools before spending a build on discovering one is
+      # absent. walkthrough.sh reports a missing binary as "empty frame for
+      # <name>" once per screen and still exits 0, so without this the real
+      # cause is buried in the middle of the log.
+      - name: Check capture tools are present
+        run: |
+          missing=""
+          for tool in Xvfb xwd xset python3; do
+            command -v "$tool" >/dev/null || missing="$missing $tool"
+          done
+          python3 -c 'import PIL' 2>/dev/null || missing="$missing python3-pillow"
+          if [ -n "$missing" ]; then
+            echo "::error::missing capture tools:$missing"
+            exit 1
+          fi
+          echo "capture tools present"
+
       - name: Capture walkthrough
         run: |
           scripts/walkthrough.sh engine/target/debug/preview
+          # walkthrough.sh exits 0 even when every grab failed, so assert the
+          # output actually exists.
           test -s docs/guide/editor-overview.png
+          test -s docs/guide/code-view.png
 
       # Fail rather than commit a picture with an error banner in it: these
       # images are what a software centre shows, and this exact toast is why
