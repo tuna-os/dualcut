@@ -1,10 +1,9 @@
 name: Publish Flatpak (tuna-os remote)
 
-# Builds the same manifest flatpak.yml uses for GitHub Release bundles,
-# but exports it as an OCI image and publishes it to ghcr.io/tuna-os/dualcut
-# + the central index in tuna-os/docs, so `flatpak install tuna-os
-# org.tunaos.dualcut` works after `flatpak remote-add tuna-os
-# https://tunaos.org/flatpak/tuna-os.flatpakrepo`. See tuna-os/flatpak-index.
+# Build/publish body lives in tuna-os/.github's reusable publish-flatpak.yml
+# (tunaos#1183 recommendation #2). This file just keeps dualcut's own
+# trigger policy and its one piece of real variance: generating offline
+# cargo sources before the flatpak-builder build.
 
 on:
   push:
@@ -16,89 +15,13 @@ permissions:
   packages: write
 
 jobs:
-  build-oci:
-    name: Build & export OCI (${{ matrix.arch }})
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - arch: x86_64
-            runs-on: ubuntu-latest
-          - arch: aarch64
-            runs-on: ubuntu-24.04-arm
-    runs-on: ${{ matrix.runs-on }}
-    container:
-      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
-      options: --privileged
-    steps:
-      - uses: actions/checkout@v7
-
-      - name: Generate offline cargo sources
-        run: |
-          pip3 install --break-system-packages aiohttp toml || pip3 install aiohttp toml
-          curl -fsSLo /tmp/flatpak-cargo-generator.py \
-            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
-          python3 /tmp/flatpak-cargo-generator.py engine/Cargo.lock \
-            -o engine/build-aux/cargo-sources.json
-
-      - name: Build
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.7
-        with:
-          manifest-path: engine/build-aux/org.tunaos.dualcut.json
-          cache-key: flatpak-builder-oci-${{ matrix.arch }}-${{ hashFiles('engine/Cargo.lock', 'engine/build-aux/*.json') }}
-          arch: ${{ matrix.arch }}
-          build-bundle: false
-          upload-artifact: false
-
-      - name: Export OCI
-        run: |
-          flatpak build-bundle --oci --arch=${{ matrix.arch }} \
-            repo dualcut-${{ matrix.arch }}.oci org.tunaos.dualcut
-
-      - name: Upload OCI artifact
-        uses: actions/upload-artifact@v7
-        with:
-          name: dualcut-oci-${{ matrix.arch }}
-          path: dualcut-${{ matrix.arch }}.oci/
-          retention-days: 1
-
   publish:
-    name: Publish to GHCR + update index
-    needs: build-oci
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: dualcut-oci-x86_64
-          path: dualcut-oci-x86_64
-
-      - uses: actions/download-artifact@v8
-        with:
-          name: dualcut-oci-aarch64
-          path: dualcut-oci-aarch64
-
-      - name: Push OCI to GHCR
-        run: |
-          echo "${{ env.GITHUB_TOKEN }}" | skopeo login ghcr.io -u "${{ github.actor }}" --password-stdin
-          skopeo copy oci:dualcut-oci-x86_64 docker://ghcr.io/tuna-os/dualcut:latest-x86_64
-          skopeo copy oci:dualcut-oci-aarch64 docker://ghcr.io/tuna-os/dualcut:latest-aarch64
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Update central index (tuna-os/docs, x86_64)
-        uses: tuna-os/.github/.github/actions/publish-flatpak-index@main
-        with:
-          oci-dir: dualcut-oci-x86_64
-          repo-name: tuna-os/dualcut
-          tags: latest
-          token: ${{ secrets.FLATPAK_INDEX_TOKEN }}
-
-      - name: Update central index (tuna-os/docs, aarch64)
-        uses: tuna-os/.github/.github/actions/publish-flatpak-index@main
-        with:
-          oci-dir: dualcut-oci-aarch64
-          repo-name: tuna-os/dualcut
-          tags: latest
-          token: ${{ secrets.FLATPAK_INDEX_TOKEN }}
+    uses: tuna-os/.github/.github/workflows/publish-flatpak.yml@main
+    with:
+      app-id: org.tunaos.dualcut
+      manifest-path: engine/build-aux/org.tunaos.dualcut.json
+      repo-name: tuna-os/dualcut
+      generate-cargo-sources: true
+      cargo-lock-path: engine/Cargo.lock
+      cargo-sources-output: engine/build-aux/cargo-sources.json
+    secrets: inherit
