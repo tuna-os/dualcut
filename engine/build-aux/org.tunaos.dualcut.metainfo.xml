@@ -40,6 +40,26 @@
     <color type="primary" scheme_preference="light">#8ea2ff</color>
     <color type="primary" scheme_preference="dark">#2a3350</color>
   </branding>
+  <!--
+    Regenerated from the real app by .github/workflows/screenshots.yml, which
+    runs scripts/walkthrough.sh on every push to main, so these track the UI.
+
+    Only the two captures verified clean are listed. Several of the other
+    hand-made images in docs/guide/ carry a "clip ... isn't decodable on this
+    GStreamer install" error toast across the bottom, because they were taken
+    without the codec plugins installed. Once CI has regenerated them with the
+    full plugin set, the rest can be added here.
+  -->
+  <screenshots>
+    <screenshot type="default">
+      <image>https://raw.githubusercontent.com/tuna-os/dualcut/main/docs/guide/editor-overview.png</image>
+      <caption>Arranging clips on the timeline</caption>
+    </screenshot>
+    <screenshot>
+      <image>https://raw.githubusercontent.com/tuna-os/dualcut/main/docs/guide/code-view.png</image>
+      <caption>Editing the same project as JSON</caption>
+    </screenshot>
+  </screenshots>
   <releases>
     <release version="0.26.0" date="2026-07-19">
       <description>
