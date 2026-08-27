@@ -1,0 +1,173 @@
+name: screenshots
+
+# Regenerate the user-guide screenshots from the real app and commit them.
+#
+# scripts/walkthrough.sh already existed and already did the hard part -- it
+# drives the app's DUALCUT_WALKTHROUGH mode under Xvfb and grabs a frame per
+# "WALKTHROUGH-SHOT <name>" marker -- but nothing ran it. The images under
+# docs/guide/ were produced by hand, so they drift from the UI silently, and
+# several of them were captured on a machine without the GStreamer codecs:
+# they carry a "clip ... isn't decodable on this GStreamer install" error
+# toast across the bottom. Those are also the images software centres show.
+#
+# Running it here fixes both: the pictures track the code, and the container
+# installs the same full plugin set ci.yml uses, so the toast does not appear.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "engine/src/**"
+      - "engine/examples/**"
+      - "scripts/walkthrough.sh"
+      - ".github/workflows/screenshots.yml"
+  pull_request:
+    paths:
+      - "engine/src/**"
+      - "scripts/walkthrough.sh"
+      - ".github/workflows/screenshots.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: screenshots-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  capture:
+    name: capture
+    runs-on: ubuntu-latest
+    container:
+      image: quay.io/fedora/fedora:45
+    permissions:
+      contents: write
+    steps:
+      # checkout degrades to a tarball without git in the container.
+      - name: Install git first
+        run: dnf install -y -q git
+
+      - uses: actions/checkout@v7
+
+      # ci.yml's list, plus xwd. The gstreamer1-plugins-* and
+      # gstreamer1-plugin-libav packages are what keep the codec error toast
+      # out of the captures.
+      #
+      # xwd is needed here but not by ci.yml: walkthrough.sh grabs each frame
+      # with xwd, which ci.yml never runs. Without it the app starts, walks
+      # every screen and emits its WALKTHROUGH-SHOT markers, and every single
+      # grab fails with "xwd: command not found" -- exactly what the first run
+      # of this workflow did.
+      #
+      # The package is plain "xwd", not xorg-x11-apps: Fedora split that
+      # megapackage into per-utility packages, and xorg-x11-apps no longer
+      # exists (checked against Fedora's package index for f44 and rawhide,
+      # which have xwd 1.0.9 and 1.0.10 and no xorg-x11-apps at all).
+      - name: Install toolchain + runtime
+        run: |
+          dnf install -y -q cargo rust clang-devel pkgconf-pkg-config \
+            gtk4-devel libadwaita-devel gstreamer1-devel \
+            gstreamer1-plugins-base-devel gst-editing-services-devel \
+            gstreamer1-plugins-good gstreamer1-plugins-bad-free \
+            gstreamer1-plugins-base-tools gstreamer1-plugins-good-extras \
+            gstreamer1-plugin-libav \
+            mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz \
+            xwd
+          git config --global --add safe.directory "$(pwd)"
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: engine
+
+      # Clear the committed images BEFORE the build, not after. If the build
+      # fails, the capture step is skipped and an unconditional upload would
+      # publish the previous run's committed PNGs as though they were this
+      # run's -- the same trap tuna-installer-kde's workflow documents having
+      # fallen into.
+      - name: Drop committed images so only this run's output ships
+        run: rm -rf docs/guide
+
+      - name: Build app binary
+        working-directory: engine
+        run: cargo build --features preview,scripting,vector
+
+      # Check the capture tools before spending a build on discovering one is
+      # absent. walkthrough.sh reports a missing binary as "empty frame for
+      # <name>" once per screen and still exits 0, so without this the real
+      # cause is buried in the middle of the log.
+      - name: Check capture tools are present
+        run: |
+          missing=""
+          for tool in Xvfb xwd xset python3; do
+            command -v "$tool" >/dev/null || missing="$missing $tool"
+          done
+          python3 -c 'import PIL' 2>/dev/null || missing="$missing python3-pillow"
+          if [ -n "$missing" ]; then
+            echo "::error::missing capture tools:$missing"
+            exit 1
+          fi
+          echo "capture tools present"
+
+      - name: Capture walkthrough
+        run: |
+          scripts/walkthrough.sh engine/target/debug/preview
+          # walkthrough.sh exits 0 even when every grab failed, so assert the
+          # output actually exists.
+          test -s docs/guide/editor-overview.png
+          test -s docs/guide/code-view.png
+
+      # The demo project's ball.mp4 cannot be decoded in this container --
+      # Fedora ships no H.264 decoder by default -- so the app raises a
+      # "clip ... isn't decodable" toast, and any screen captured while it is
+      # on screen carries it. Installing the full plugin set did not remove it
+      # (verified: the first successful run still flagged three images).
+      #
+      # So this gate is scoped to the images the metainfo actually points at:
+      # those are what a software centre shows, and a banner in them is a
+      # release blocker. The rest are user-guide illustrations, where it is
+      # merely untidy, and failing the job over them would keep the workflow
+      # permanently red for something it cannot fix.
+      #
+      # OCR is best-effort, not proof: a toast mid-fade is semi-transparent and
+      # tesseract does not reliably read it (scene-form.png in the first
+      # successful run was exactly that -- visibly bannered, not flagged). The
+      # two referenced images were also checked by eye.
+      - name: Reject a referenced screenshot carrying an error toast
+        run: |
+          dnf install -y -q tesseract || {
+            echo "::notice::tesseract unavailable, skipping the OCR check"
+            exit 0
+          }
+
+          referenced=$(grep -oE '[^/<]+\.png' engine/build-aux/org.tunaos.dualcut.metainfo.xml | sort -u)
+          [ -n "$referenced" ] || { echo "::error::no screenshots referenced in metainfo"; exit 1; }
+          echo "metainfo references:" $referenced
+
+          fail=0
+          for png in docs/guide/*.png; do
+            base=$(basename "$png")
+            if tesseract "$png" - 2>/dev/null | grep -qiE "isn't decodable|missing plugin|unsupported codec"; then
+              if printf '%s\n' $referenced | grep -qx "$base"; then
+                echo "::error::$base is referenced by the metainfo and carries a codec error toast"
+                fail=1
+              else
+                echo "::warning::$base carries a codec error toast (not referenced by the metainfo)"
+              fi
+            fi
+          done
+          [ "$fail" -eq 0 ]
+
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: guide-screenshots
+          path: docs/guide/
+
+      - name: Commit refreshed screenshots
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/guide
+          if git diff --cached --quiet; then echo "screenshots unchanged"; exit 0; fi
+          git commit -m "docs: refresh guide screenshots [skip ci]"
+          git pull --rebase origin main
+          git push
