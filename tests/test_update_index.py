@@ -154,6 +154,28 @@ class TestCreate:
         data = json.loads(index.read_text())
         assert data["Registry"] == "https://ghcr.io/example"
 
+    def test_custom_registry_with_http_scheme(self, tmp_path):
+        oci = make_oci_layout(tmp_path, labels=flatpak_labels())
+        index = tmp_path / "index.json"
+        res = run_script(oci, index, "tuna-os/dualcut", registry="http://ghcr.io/example")
+        assert res.returncode == 0, res.stderr
+        data = json.loads(index.read_text())
+        assert data["Registry"] == "https://ghcr.io/example"
+
+    def test_preserves_appstream_labels(self, tmp_path):
+        labels = flatpak_labels({
+            "org.freedesktop.appstream.name": "Dualcut",
+            "org.freedesktop.appstream.icon": "org.example.Dualcut.png",
+        })
+        oci = make_oci_layout(tmp_path, labels=labels)
+        index = tmp_path / "index.json"
+        res = run_script(oci, index, "tuna-os/dualcut")
+        assert res.returncode == 0, res.stderr
+        img_labels = json.loads(index.read_text())["Results"][0]["Images"][0]["Labels"]
+        assert img_labels.get("org.freedesktop.appstream.name") == "Dualcut"
+        assert img_labels.get("org.freedesktop.appstream.icon") == "org.example.Dualcut.png"
+
+
 
 # ── update semantics (the two publish invocations) ─────────────────────────
 
