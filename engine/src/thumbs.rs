@@ -172,9 +172,8 @@ pub fn decode_mono_pcm(uri: &str) -> Result<(Vec<f32>, u32)> {
     while let Ok(sample) = sink.pull_sample() {
         if let Some(buffer) = sample.buffer() {
             let map = buffer.map_readable()?;
-            samples.extend(
-                map.chunks_exact(4).map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
-            );
+            let (frames, _rest) = map.as_chunks::<4>();
+            samples.extend(frames.iter().copied().map(f32::from_le_bytes));
         }
     }
     pipeline.set_state(gst::State::Null)?;

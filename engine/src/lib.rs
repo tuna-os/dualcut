@@ -8,7 +8,6 @@
 use anyhow::{Context, Result};
 use ges::prelude::*;
 use gstreamer as gst;
-use gst::prelude::*;
 use gstreamer_pbutils as gst_pbutils;
 use gstreamer_editing_services as ges;
 
