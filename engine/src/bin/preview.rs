@@ -29,6 +29,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::SystemTime;
 
+
 #[path = "preview/captions.rs"]
 mod captions;
 
@@ -42,6 +43,43 @@ use prefs::{
     prefs_set_default_font_family, prefs_set_preview_scale, prefs_set_show_script,
     prefs_set_use_proxies, prefs_show_script, prefs_use_proxies, preview_scale, remember_recent,
 };
+
+#[path = "preview/keys.rs"]
+mod keys;
+
+#[path = "preview/history.rs"]
+mod history;
+
+use history::{diff_summary, take_agent_marker, EditSource, HistoryEntry};
+
+#[path = "preview/coords.rs"]
+mod coords;
+
+use coords::{
+    active_clips_at, clip_box, failed_proxies, failed_templates, failed_thumbs, fx_hash, media_uri,
+    snap_time, widget_to_comp,
+};
+
+#[path = "preview/pipeline.rs"]
+mod pipeline;
+
+use pipeline::{
+    compile_project, compile_project_with_warnings, compile_project_with_warnings_cache,
+    make_pipeline, seek_to, start_paused, with_proxies,
+};
+
+#[path = "preview/skills.rs"]
+mod skills;
+
+use skills::{
+    copy_dir_recursive, install_skill_to, show_skills_dialog, skill_source_dir,
+    skill_update_available,
+};
+
+#[path = "preview/export.rs"]
+mod export;
+
+use export::{export_target, show_export_dialog, StartRender};
 
 const DEFAULT_PPS: f64 = 42.0;
 /// Fixed width of a timeline lane's icon+label+toggles column. Shared by
@@ -74,581 +112,23 @@ fn main() -> glib::ExitCode {
     app.run_with_args::<&str>(&[])
 }
 
-/// Who made an edit-history entry (surfaced in the History panel so it's
-/// clear which changes came from the GUI vs. an agent driving the HTTP API
-/// vs. someone editing the project file directly).
-#[derive(Clone, Copy, PartialEq)]
-enum EditSource {
-    Gui,
-    Agent,
-    ExternalFile,
-}
-
-#[derive(Clone)]
-struct HistoryEntry {
-    /// Document JSON *before* this edit -- what undo, or jumping to this
-    /// entry in the History panel, restores.
-    snapshot: String,
-    source: EditSource,
-    summary: String,
-    at: SystemTime,
-}
-
-struct AppState {
-    pipeline: ges::Pipeline,
-    project: Option<Project>,
-    project_path: Option<PathBuf>,
-    mtime: Option<SystemTime>,
-    duration: f64,
-    selected: Option<String>,
+pub(crate) struct AppState {
+    pub(crate) pipeline: ges::Pipeline,
+    pub(crate) project: Option<Project>,
+    pub(crate) project_path: Option<PathBuf>,
+    pub(crate) mtime: Option<SystemTime>,
+    pub(crate) duration: f64,
+    pub(crate) selected: Option<String>,
     /// Timeline zoom, pixels per second.
-    pps: f64,
-    history: Vec<HistoryEntry>,
-    redo: Vec<String>,
+    pub(crate) pps: f64,
+    pub(crate) history: Vec<HistoryEntry>,
+    pub(crate) redo: Vec<String>,
     /// Set while the app itself writes the file, to skip one reload cycle.
-    self_write: bool,
+    pub(crate) self_write: bool,
 }
 
-type Shared = Rc<RefCell<AppState>>;
+pub(crate) type Shared = Rc<RefCell<AppState>>;
 
-fn make_pipeline(timeline: &ges::Timeline) -> Result<(ges::Pipeline, gtk::gdk::Paintable)> {
-    let pipeline = ges::Pipeline::new();
-    pipeline.set_timeline(timeline).context("attaching timeline")?;
-    let sink = gst::ElementFactory::make("gtk4paintablesink")
-        .build()
-        .context("creating gtk4paintablesink")?;
-    let paintable = sink.property::<gtk::gdk::Paintable>("paintable");
-    let video_sink: gst::Element = match gst::ElementFactory::make("glsinkbin")
-        .property("sink", &sink)
-        .build()
-    {
-        Ok(glsink) => glsink,
-        Err(_) => sink.clone(),
-    };
-    pipeline.preview_set_video_sink(Some(&video_sink));
-    Ok((pipeline, paintable))
-}
-
-fn start_paused(pipeline: &ges::Pipeline) -> Result<()> {
-    if pipeline.set_state(gst::State::Paused).is_err() {
-        if let Err(e) = pipeline.set_state(gst::State::Null) {
-            eprintln!("start_paused: pipeline Null reset failed: {e}");
-        }
-        if let Ok(fake) = gst::ElementFactory::make("fakesink").build() {
-            pipeline.preview_set_audio_sink(Some(&fake));
-        }
-        pipeline.set_state(gst::State::Paused).context("pausing pipeline")?;
-    }
-    Ok(())
-}
-
-/// Customizable keyboard shortcuts, with presets matching other editors'
-/// muscle memory. Bindings are stored as `key.<action>=<combo>`
-/// lines in the same flat prefs file as everything else, one combo per
-/// action -- e.g. `key.split=ctrl+k`. `Combo` parses/formats that string;
-/// `Action` enumerates every command dualcut currently binds a key to.
-mod keys {
-    use super::{gtk, prefs_file, prefs_set};
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub enum Action {
-        PlayPause,
-        StepBack,
-        StepForward,
-        GoStart,
-        GoEnd,
-        Split,
-        RippleDelete,
-        Undo,
-        Redo,
-    }
-
-    impl Action {
-        pub const ALL: [Action; 9] = [
-            Action::PlayPause,
-            Action::StepBack,
-            Action::StepForward,
-            Action::GoStart,
-            Action::GoEnd,
-            Action::Split,
-            Action::RippleDelete,
-            Action::Undo,
-            Action::Redo,
-        ];
-
-        pub fn key(self) -> &'static str {
-            match self {
-                Action::PlayPause => "play_pause",
-                Action::StepBack => "step_back",
-                Action::StepForward => "step_forward",
-                Action::GoStart => "go_start",
-                Action::GoEnd => "go_end",
-                Action::Split => "split",
-                Action::RippleDelete => "ripple_delete",
-                Action::Undo => "undo",
-                Action::Redo => "redo",
-            }
-        }
-
-        pub fn label(self) -> &'static str {
-            match self {
-                Action::PlayPause => "Play / Pause",
-                Action::StepBack => "Step one frame back",
-                Action::StepForward => "Step one frame forward",
-                Action::GoStart => "Go to start",
-                Action::GoEnd => "Go to end",
-                Action::Split => "Split clip at playhead",
-                Action::RippleDelete => "Delete selected clip (ripple)",
-                Action::Undo => "Undo",
-                Action::Redo => "Redo",
-            }
-        }
-    }
-
-    #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-    pub struct Combo {
-        pub key: gtk::gdk::Key,
-        pub ctrl: bool,
-        pub shift: bool,
-    }
-
-    impl Combo {
-        fn new(key: gtk::gdk::Key, ctrl: bool, shift: bool) -> Self {
-            Combo { key, ctrl, shift }
-        }
-
-        /// Parse a combo string like `"ctrl+shift+z"` or `"space"`.
-        /// Case-insensitive; `+`-separated; last segment is the key name.
-        pub fn parse(s: &str) -> Option<Combo> {
-            let mut ctrl = false;
-            let mut shift = false;
-            let mut key_name = "";
-            for part in s.split('+').map(str::trim) {
-                match part.to_ascii_lowercase().as_str() {
-                    "ctrl" | "cmd" | "primary" => ctrl = true,
-                    "shift" => shift = true,
-                    _ => key_name = part,
-                }
-            }
-            let key = gtk::gdk::Key::from_name(key_name)
-                .or_else(|| gtk::gdk::Key::from_name(key_name.to_ascii_lowercase()))?;
-            // Normalize letter keys to their lowercase form so two
-            // differently-cased spellings of the same combo (e.g. "ctrl+z"
-            // vs "Ctrl+Z", or a Shift-modified capture) compare equal and
-            // format identically -- `shift` alone (not the key itself)
-            // carries whether Shift is part of the combo.
-            Some(Combo::new(key.to_lower(), ctrl, shift))
-        }
-
-        /// Render back to the same string format `parse` accepts.
-        pub fn format(self) -> String {
-            let mut s = String::new();
-            if self.ctrl {
-                s.push_str("ctrl+");
-            }
-            if self.shift {
-                s.push_str("shift+");
-            }
-            s.push_str(self.key.name().as_deref().unwrap_or("?"));
-            s
-        }
-
-        /// Human-readable form for display, e.g. "Ctrl+Shift+Z".
-        pub fn display(self) -> String {
-            let mut parts = Vec::new();
-            if self.ctrl {
-                parts.push("Ctrl".to_string());
-            }
-            if self.shift {
-                parts.push("Shift".to_string());
-            }
-            let name = self.key.name().map(|n| n.to_string()).unwrap_or_else(|| "?".into());
-            parts.push(match name.as_str() {
-                "space" => "Space".into(),
-                "Left" | "Right" | "Home" | "End" | "Delete" => name,
-                short if short.len() == 1 => short.to_uppercase(),
-                other => other.to_string(),
-            });
-            parts.join("+")
-        }
-
-        /// GTK accelerator syntax for `adw::ShortcutsItem`, e.g. "<Ctrl>Z".
-        pub fn gtk_accel(self) -> String {
-            let mut s = String::new();
-            if self.ctrl {
-                s.push_str("<Ctrl>");
-            }
-            if self.shift {
-                s.push_str("<Shift>");
-            }
-            let name = self.key.name().map(|n| n.to_string()).unwrap_or_default();
-            let display_name = if name.len() == 1 { name.to_uppercase() } else { name };
-            s.push_str(&display_name);
-            s
-        }
-
-        pub fn matches(self, key: gtk::gdk::Key, modifier: gtk::gdk::ModifierType) -> bool {
-            let ctrl = modifier.contains(gtk::gdk::ModifierType::CONTROL_MASK);
-            let shift = modifier.contains(gtk::gdk::ModifierType::SHIFT_MASK);
-            // Letter keys arrive as lower/uppercase depending on Shift;
-            // normalize both sides to lowercase so "S" and "s" match the
-            // same binding regardless of how Shift was involved.
-            key.to_lower() == self.key.to_lower() && ctrl == self.ctrl && shift == self.shift
-        }
-    }
-
-    /// dualcut's own defaults -- also the fallback for any action a preset
-    /// (e.g. iMovie) doesn't have a real equivalent for.
-    pub const DEFAULT: [(Action, &str); 9] = [
-        (Action::PlayPause, "space"),
-        (Action::StepBack, "Left"),
-        (Action::StepForward, "Right"),
-        (Action::GoStart, "Home"),
-        (Action::GoEnd, "End"),
-        (Action::Split, "s"),
-        (Action::RippleDelete, "Delete"),
-        (Action::Undo, "ctrl+z"),
-        (Action::Redo, "ctrl+shift+z"),
-    ];
-
-    /// One preset per major NLE, covering only the actions dualcut has an
-    /// equivalent for (verified against each app's own docs, not guessed):
-    /// Premiere/Resolve's plain Delete does something dualcut has no
-    /// equivalent for (leave a gap), so their Shift+Delete -- the actual
-    /// ripple delete -- maps to dualcut's only delete action. Final Cut
-    /// Pro and iMovie's plain Delete already IS a ripple delete, matching
-    /// dualcut's default exactly. Split key is each app's real "blade"/
-    /// "add edit" shortcut, with Cmd read as Ctrl (no Cmd key on Linux).
-    /// iMovie has no dedicated go-to-start/end shortcut, so those two
-    /// fall back to dualcut's own Home/End rather than leaving them unset.
-    pub struct Preset {
-        pub name: &'static str,
-        pub bindings: &'static [(Action, &'static str)],
-    }
-
-    pub const PRESETS: [Preset; 5] = [
-        Preset { name: "Dualcut (default)", bindings: &DEFAULT },
-        Preset {
-            name: "Adobe Premiere Pro",
-            bindings: &[
-                (Action::PlayPause, "space"),
-                (Action::StepBack, "Left"),
-                (Action::StepForward, "Right"),
-                (Action::GoStart, "Home"),
-                (Action::GoEnd, "End"),
-                (Action::Split, "ctrl+k"),
-                (Action::RippleDelete, "shift+Delete"),
-                (Action::Undo, "ctrl+z"),
-                (Action::Redo, "ctrl+shift+z"),
-            ],
-        },
-        Preset {
-            name: "DaVinci Resolve",
-            bindings: &[
-                (Action::PlayPause, "space"),
-                (Action::StepBack, "Left"),
-                (Action::StepForward, "Right"),
-                (Action::GoStart, "Home"),
-                (Action::GoEnd, "End"),
-                (Action::Split, "ctrl+b"),
-                (Action::RippleDelete, "shift+Delete"),
-                (Action::Undo, "ctrl+z"),
-                (Action::Redo, "ctrl+shift+z"),
-            ],
-        },
-        Preset {
-            name: "Final Cut Pro",
-            bindings: &[
-                (Action::PlayPause, "space"),
-                (Action::StepBack, "Left"),
-                (Action::StepForward, "Right"),
-                (Action::GoStart, "Home"),
-                (Action::GoEnd, "End"),
-                (Action::Split, "ctrl+b"),
-                (Action::RippleDelete, "Delete"),
-                (Action::Undo, "ctrl+z"),
-                (Action::Redo, "ctrl+shift+z"),
-            ],
-        },
-        Preset {
-            name: "iMovie",
-            bindings: &[
-                (Action::PlayPause, "space"),
-                (Action::StepBack, "Left"),
-                (Action::StepForward, "Right"),
-                (Action::GoStart, "Home"),
-                (Action::GoEnd, "End"),
-                (Action::Split, "ctrl+b"),
-                (Action::RippleDelete, "Delete"),
-                (Action::Undo, "ctrl+z"),
-                (Action::Redo, "ctrl+shift+z"),
-            ],
-        },
-    ];
-
-    /// The active binding for one action: a custom override from prefs if
-    /// set, else dualcut's own default.
-    pub fn binding(action: Action) -> Combo {
-        let prefs_key = format!("key.{}", action.key());
-        std::fs::read_to_string(prefs_file())
-            .ok()
-            .and_then(|s| {
-                s.lines().find_map(|l| {
-                    let (k, v) = l.split_once('=')?;
-                    (k.trim() == prefs_key).then(|| Combo::parse(v.trim())).flatten()
-                })
-            })
-            .or_else(|| DEFAULT.iter().find(|(a, _)| *a == action).and_then(|(_, s)| Combo::parse(s)))
-            .unwrap_or(Combo::new(gtk::gdk::Key::VoidSymbol, false, false))
-    }
-
-    pub fn set_binding(action: Action, combo: Combo) {
-        prefs_set(&format!("key.{}", action.key()), &combo.format());
-    }
-
-    /// Apply every binding in a preset as an override, including actions
-    /// the preset doesn't mention (reset to dualcut's own default) -- so
-    /// switching presets never leaves a stale custom binding behind.
-    pub fn apply_preset(preset: &Preset) {
-        for action in Action::ALL {
-            let combo = preset
-                .bindings
-                .iter()
-                .find(|(a, _)| *a == action)
-                .or_else(|| DEFAULT.iter().find(|(a, _)| *a == action))
-                .and_then(|(_, s)| Combo::parse(s));
-            if let Some(combo) = combo {
-                set_binding(action, combo);
-            }
-        }
-    }
-
-    /// Look up which action (if any) a keypress triggers, given the
-    /// current bindings.
-    pub fn action_for(key: gtk::gdk::Key, modifier: gtk::gdk::ModifierType) -> Option<Action> {
-        Action::ALL.into_iter().find(|&a| binding(a).matches(key, modifier))
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn parse_and_format_roundtrip() {
-            for s in ["space", "Left", "ctrl+z", "ctrl+shift+z", "shift+Delete", "ctrl+k"] {
-                let combo = Combo::parse(s).unwrap_or_else(|| panic!("failed to parse {s:?}"));
-                let reparsed = Combo::parse(&combo.format())
-                    .unwrap_or_else(|| panic!("failed to reparse {:?}", combo.format()));
-                assert_eq!(combo, reparsed, "roundtrip mismatch for {s:?}");
-            }
-        }
-
-        #[test]
-        fn parse_is_case_insensitive_for_modifiers() {
-            let a = Combo::parse("ctrl+z").unwrap();
-            let b = Combo::parse("Ctrl+Z").unwrap();
-            assert_eq!(a, b);
-        }
-
-        #[test]
-        fn matches_requires_exact_modifier_state() {
-            let combo = Combo::parse("ctrl+z").unwrap();
-            assert!(combo.matches(gtk::gdk::Key::z, gtk::gdk::ModifierType::CONTROL_MASK));
-            assert!(combo.matches(gtk::gdk::Key::Z, gtk::gdk::ModifierType::CONTROL_MASK));
-            assert!(!combo.matches(gtk::gdk::Key::z, gtk::gdk::ModifierType::empty()));
-            assert!(!combo.matches(
-                gtk::gdk::Key::z,
-                gtk::gdk::ModifierType::CONTROL_MASK | gtk::gdk::ModifierType::SHIFT_MASK
-            ));
-        }
-
-        #[test]
-        fn bare_key_does_not_match_with_modifiers_held() {
-            let combo = Combo::parse("space").unwrap();
-            assert!(combo.matches(gtk::gdk::Key::space, gtk::gdk::ModifierType::empty()));
-            assert!(!combo.matches(gtk::gdk::Key::space, gtk::gdk::ModifierType::CONTROL_MASK));
-        }
-
-        #[test]
-        fn every_default_and_preset_binding_parses() {
-            for (action, s) in DEFAULT {
-                assert!(Combo::parse(s).is_some(), "DEFAULT[{action:?}] = {s:?} failed to parse");
-            }
-            for preset in PRESETS {
-                for (action, s) in preset.bindings {
-                    assert!(
-                        Combo::parse(s).is_some(),
-                        "preset {:?}[{action:?}] = {s:?} failed to parse",
-                        preset.name
-                    );
-                }
-            }
-        }
-
-        #[test]
-        fn every_preset_covers_every_action() {
-            // Not a hard requirement (apply_preset falls back to DEFAULT
-            // for anything missing), but every preset here should be
-            // fully specified -- a silent fallback would mean a typo'd
-            // Action variant went unnoticed.
-            for preset in PRESETS {
-                for action in Action::ALL {
-                    assert!(
-                        preset.bindings.iter().any(|(a, _)| *a == action),
-                        "preset {:?} has no binding for {action:?}",
-                        preset.name
-                    );
-                }
-            }
-        }
-
-        #[test]
-        fn display_and_gtk_accel_are_nonempty_for_every_default() {
-            for (action, s) in DEFAULT {
-                let combo = Combo::parse(s).unwrap();
-                assert!(!combo.display().is_empty(), "{action:?} has empty display()");
-                assert!(!combo.gtk_accel().is_empty(), "{action:?} has empty gtk_accel()");
-            }
-        }
-    }
-}
-
-/// Preview-only: swap video clip sources for their cached 960px proxies
-/// where one exists. Exports go through render_project on the untouched
-/// document, so originals are never affected.
-fn with_proxies(project: &Project, base_dir: &std::path::Path, cache_dir: &std::path::Path) -> Project {
-    let mut swapped = project.clone();
-    let clips = swapped
-        .scenes
-        .iter_mut()
-        .flat_map(|s| s.layers.iter_mut())
-        .chain(swapped.overlays.iter_mut().flat_map(|t| t.clips.iter_mut()));
-    for clip in clips {
-        if let document::Element::Video { src, .. } = &mut clip.element
-            && let Some(uri) = media_uri(src, base_dir)
-            && uri.starts_with("file://")
-        {
-            let proxy = dualcut_engine::thumbs::proxy_path(cache_dir, &uri);
-            if proxy.exists() {
-                *src = proxy.display().to_string();
-            }
-        }
-    }
-    swapped
-}
-
-/// Coarse, cheap description of what changed between two document states,
-/// for the Edit History panel. Not a real diff (no per-field tracking of
-/// which clip/effect changed) -- counts clips/scenes/tracks/defs and falls
-/// back to a generic label, which is honest about its own resolution
-/// without threading a label through every one of commit_document's many
-/// call sites.
-fn diff_summary(prev: &Project, new: &Project) -> String {
-    let clip_count = |p: &Project| -> usize {
-        p.scenes.iter().map(|s| s.layers.len()).sum::<usize>()
-            + p.overlays.iter().map(|t| t.clips.len()).sum::<usize>()
-    };
-    let (pc, nc) = (clip_count(prev), clip_count(new));
-    if nc > pc {
-        return format!("Added {} clip{}", nc - pc, if nc - pc == 1 { "" } else { "s" });
-    }
-    if nc < pc {
-        return format!("Removed {} clip{}", pc - nc, if pc - nc == 1 { "" } else { "s" });
-    }
-    if new.scenes.len() != prev.scenes.len() {
-        return if new.scenes.len() > prev.scenes.len() { "Added scene" } else { "Removed scene" }
-            .into();
-    }
-    if new.overlays.len() != prev.overlays.len() {
-        return if new.overlays.len() > prev.overlays.len() {
-            "Added overlay track"
-        } else {
-            "Removed overlay track"
-        }
-        .into();
-    }
-    if new.defs.len() != prev.defs.len() {
-        return "Edited templates".into();
-    }
-    if (prev.duration() - new.duration()).abs() > 0.001 {
-        return "Changed timing".into();
-    }
-    "Edited project".into()
-}
-
-/// Consume the agent-edit marker (written by `api::serve_file_api` just
-/// before the file write that's about to trigger this reload) if it's
-/// fresh, tagging the resulting history entry as agent-sourced with the
-/// request's own summary. Stale/missing marker => a human edited the file
-/// directly, not through the HTTP API.
-fn take_agent_marker(project_path: &std::path::Path) -> Option<(EditSource, String)> {
-    let cache = project_path.parent()?.join(".dualcut-cache");
-    let marker = cache.join("agent-edit.json");
-    let raw = std::fs::read_to_string(&marker).ok()?;
-    let _ = std::fs::remove_file(&marker);
-    let v: serde_json::Value = serde_json::from_str(&raw).ok()?;
-    let at_ms = v["at_unix_ms"].as_u64()?;
-    let now_ms =
-        SystemTime::now().duration_since(std::time::UNIX_EPOCH).ok()?.as_millis() as u64;
-    if now_ms.saturating_sub(at_ms) > 5000 {
-        return None;
-    }
-    Some((EditSource::Agent, v["summary"].as_str().unwrap_or("Agent edit").to_string()))
-}
-
-fn compile_project(project: &Project, base_dir: &std::path::Path) -> Result<ges::Timeline> {
-    Ok(compile_project_with_warnings(project, base_dir)?.0)
-}
-
-/// As [`compile_project`], but also returns compile warnings so callers
-/// with a live `editor` can surface them instead of leaving them only in
-/// `eprintln!` output the user never sees (#57).
-fn compile_project_with_warnings(
-    project: &Project,
-    base_dir: &std::path::Path,
-) -> Result<(ges::Timeline, Vec<String>)> {
-    compile_project_with_warnings_inner(project, base_dir, &base_dir.join(".dualcut-cache"))
-}
-
-/// As [`compile_project_with_warnings`] but with an explicit cache
-/// directory (editor passes `cache_dir()` for Flatpak safety, #63).
-pub(crate) fn compile_project_with_warnings_cache(
-    project: &Project,
-    base_dir: &std::path::Path,
-    cache_dir: &std::path::Path,
-) -> Result<(ges::Timeline, Vec<String>)> {
-    compile_project_with_warnings_inner(project, base_dir, cache_dir)
-}
-
-fn compile_project_with_warnings_inner(
-    project: &Project,
-    base_dir: &std::path::Path,
-    cache_dir: &std::path::Path,
-) -> Result<(ges::Timeline, Vec<String>)> {
-    // Preview pipelines render at reduced resolution (Preferences) and
-    // read proxy media where available; exports go through render_project
-    // at full quality from the original sources.
-    let project = if prefs_use_proxies() {
-        std::borrow::Cow::Owned(with_proxies(project, base_dir, cache_dir))
-    } else {
-        std::borrow::Cow::Borrowed(project)
-    };
-    let compiled = mapping::compile_scaled(&project, base_dir, preview_scale())?;
-    for warning in &compiled.warnings {
-        eprintln!("warning: {warning}");
-    }
-    Ok((compiled.timeline, compiled.warnings))
-}
-
-fn seek_to(pipeline: &ges::Pipeline, secs: f64) {
-    let _ = pipeline.seek_simple(
-        gst::SeekFlags::FLUSH | gst::SeekFlags::KEY_UNIT,
-        gst::ClockTime::from_useconds((secs.max(0.0) * 1e6) as u64),
-    );
-}
-
-
-/// Widgets the controller refreshes when the document changes.
 struct Ui {
     picture: gtk::Picture,
     seek: gtk::Scale,
@@ -671,25 +151,25 @@ struct Ui {
     code_buffer: gtk::TextBuffer,
 }
 
-struct Editor {
-    state: Shared,
-    ui: RefCell<Option<Ui>>,
+pub(crate) struct Editor {
+    pub(crate) state: Shared,
+    pub(crate) ui: RefCell<Option<Ui>>,
     /// True while a render thread is active (#35).
-    exporting: Cell<bool>,
+    pub(crate) exporting: Cell<bool>,
     /// Exports waiting behind the active render: (output path, profile).
-    export_queue: RefCell<VecDeque<(String, String)>>,
+    pub(crate) export_queue: RefCell<VecDeque<(String, String)>>,
     /// Scene/track ids collapsed in the Clips tab's tree (#39); persisted
     /// across rebuild_inspector() calls since the widgets are torn down
     /// and rebuilt on every edit.
-    clips_collapsed: RefCell<std::collections::HashSet<String>>,
+    pub(crate) clips_collapsed: RefCell<std::collections::HashSet<String>>,
     /// Media URIs with a proxy transcode in flight on the thumbnail
     /// worker (#50); checked by rebuild_media() to show a "Generating
     /// preview…" spinner on that Library cell instead of a blank one.
-    pending_proxies: RefCell<std::collections::HashSet<String>>,
+    pub(crate) pending_proxies: RefCell<std::collections::HashSet<String>>,
 }
 
 impl Editor {
-    fn base_dir(&self) -> PathBuf {
+    pub(crate) fn base_dir(&self) -> PathBuf {
         self.state
             .borrow()
             .project_path
@@ -704,7 +184,7 @@ impl Editor {
     /// do this). Unsaved projects: `$XDG_CACHE_HOME/dualcut/` (falls
     /// back to `~/.cache/dualcut/`), avoiding the non-writable cwd that
     /// Flatpak and snaps impose.
-    fn cache_dir(&self) -> PathBuf {
+    pub(crate) fn cache_dir(&self) -> PathBuf {
         if let Some(parent) = self
             .state
             .borrow()
@@ -917,7 +397,7 @@ impl Editor {
     }
 
     /// Transient notification without an action button.
-    fn toast(&self, message: &str) {
+    pub(crate) fn toast(&self, message: &str) {
         let ui = self.ui.borrow();
         let Some(ui) = ui.as_ref() else { return };
         let toast = adw::Toast::new(message);
@@ -941,7 +421,7 @@ impl Editor {
         }
     }
 
-    fn window(&self) -> Option<gtk::Window> {
+    pub(crate) fn window(&self) -> Option<gtk::Window> {
         let ui = self.ui.borrow();
         ui.as_ref().and_then(|u| u.picture.root().and_downcast::<gtk::Window>())
     }
@@ -3195,219 +2675,6 @@ impl Editor {
     }
 }
 
-fn clip_box(project: &Project, clip: &document::Clip) -> (f64, f64, f64, f64) {
-    let t = &clip.transform;
-    let w = if t.width > 0.0 { t.width } else { project.meta.width as f64 };
-    let h = if t.height > 0.0 { t.height } else { project.meta.height as f64 };
-    (t.x, t.y, w, h)
-}
-
-/// Clips active at `time` with absolute-time info, topmost first
-/// (overlays before scene layers, lower layer index above higher).
-fn active_clips_at(project: &Project, time: f64) -> Vec<(String, f64, f64, f64, f64)> {
-    let mut out = Vec::new();
-    for track in &project.overlays {
-        for clip in &track.clips {
-            if time >= clip.start && time < clip.start + clip.duration.max(0.01) {
-                let (x, y, w, h) = clip_box(project, clip);
-                out.push((clip.id.clone(), x, y, w, h));
-            }
-        }
-    }
-    for (i, scene) in project.scenes.iter().enumerate() {
-        let offset = project.scene_offset(i);
-        if time < offset || time >= offset + scene.duration {
-            continue;
-        }
-        for clip in &scene.layers {
-            let local = time - offset;
-            let duration = if clip.duration > 0.0 { clip.duration } else { scene.duration - clip.start };
-            if local >= clip.start && local < clip.start + duration {
-                let (x, y, w, h) = clip_box(project, clip);
-                out.push((clip.id.clone(), x, y, w, h));
-            }
-        }
-    }
-    out
-}
-
-/// Map preview-widget coords to composition coords through ContentFit::Contain
-/// letterboxing. Returns None outside the video area.
-fn widget_to_comp(
-    project: &Project,
-    widget_w: f64,
-    widget_h: f64,
-    wx: f64,
-    wy: f64,
-) -> Option<(f64, f64, f64)> {
-    let (cw, ch) = (project.meta.width as f64, project.meta.height as f64);
-    let scale = (widget_w / cw).min(widget_h / ch);
-    if scale <= 0.0 {
-        return None;
-    }
-    let (vw, vh) = (cw * scale, ch * scale);
-    let (ox, oy) = ((widget_w - vw) / 2.0, (widget_h - vh) / 2.0);
-    let (cx, cy) = ((wx - ox) / scale, (wy - oy) / scale);
-    if cx < 0.0 || cy < 0.0 || cx > cw || cy > ch {
-        return None;
-    }
-    Some((cx, cy, scale))
-}
-
-/// Snap a time to scene boundaries or the half-second grid (0.15s window).
-fn snap_time(project: &Project, raw: f64) -> f64 {
-    const WINDOW: f64 = 0.15;
-    let mut candidates: Vec<f64> = (0..=project.scenes.len())
-        .map(|i| {
-            if i == project.scenes.len() {
-                project.duration()
-            } else {
-                project.scene_offset(i)
-            }
-        })
-        .collect();
-    candidates.push((raw * 2.0).round() / 2.0);
-    candidates
-        .into_iter()
-        .filter(|c| (c - raw).abs() <= WINDOW)
-        .min_by(|a, b| (a - raw).abs().total_cmp(&(b - raw).abs()))
-        .unwrap_or(raw)
-        .max(0.0)
-}
-
-/// Proxy transcodes that failed this session — skipped on later rebuilds.
-fn failed_thumbs() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static SET: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    SET.get_or_init(|| std::sync::Mutex::new(std::collections::HashSet::new()))
-}
-
-fn failed_proxies() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static FAILED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    FAILED.get_or_init(Default::default)
-}
-
-/// Def names whose Templates-tab preview thumbnail failed this session --
-/// skipped on later rebuilds. Defs with a video/audio/image layer can
-/// never render a preview this way (the param-preview substitution fakes
-/// a value like "CLIP" for a {clip} param, which isn't a real media
-/// path), so without this a rebuild_strip() on every zoom/edit would
-/// retry -- and fail -- the same doomed thumbnail forever.
-fn failed_templates() -> &'static std::sync::Mutex<std::collections::HashSet<String>> {
-    static FAILED: std::sync::OnceLock<std::sync::Mutex<std::collections::HashSet<String>>> =
-        std::sync::OnceLock::new();
-    FAILED.get_or_init(Default::default)
-}
-
-fn media_uri(src: &str, base_dir: &std::path::Path) -> Option<String> {
-    if src.contains("://") {
-        return Some(src.to_string());
-    }
-    base_dir.join(src).canonicalize().ok().map(|p| format!("file://{}", p.display()))
-}
-
-/// Locate the bundled agent skill directory (flatpak install or repo).
-fn skill_source_dir() -> Option<PathBuf> {
-    ["/app/share/dualcut/skills/dualcut", "../skills/dualcut", "skills/dualcut"]
-        .iter()
-        .map(PathBuf::from)
-        .find(|p| p.join("SKILL.md").exists())
-}
-
-fn copy_dir_recursive(src: &std::path::Path, dest: &std::path::Path) -> Result<()> {
-    std::fs::create_dir_all(dest)?;
-    for entry in std::fs::read_dir(src)?.flatten() {
-        let path = entry.path();
-        let target = dest.join(entry.file_name());
-        if path.is_dir() {
-            copy_dir_recursive(&path, &target)?;
-        } else {
-            std::fs::copy(&path, &target)?;
-        }
-    }
-    Ok(())
-}
-
-fn install_skill_to(target_root: &std::path::Path) -> Result<PathBuf> {
-    let src = skill_source_dir().context("bundled skill files not found")?;
-    let dest = target_root.join("dualcut");
-    // references/ (schema + types) travels with the skill so it stays
-    // self-contained wherever it's installed (#49).
-    copy_dir_recursive(&src, &dest)?;
-    prefs_set("skill_install_dir", &target_root.display().to_string());
-    Ok(dest)
-}
-
-/// Bundled skill differs from what's installed at the recorded location
-/// (#49) -- returns the install root (parent of the `dualcut/` skill dir)
-/// to reinstall to, if an update is available.
-fn skill_update_available() -> Option<PathBuf> {
-    let target_root = std::fs::read_to_string(prefs_file()).ok().and_then(|s| {
-        s.lines().find_map(|l| l.trim().strip_prefix("skill_install_dir=").map(PathBuf::from))
-    })?;
-    let src = skill_source_dir()?;
-    let bundled = std::fs::read_to_string(src.join("SKILL.md")).ok()?;
-    let installed =
-        std::fs::read_to_string(target_root.join("dualcut").join("SKILL.md")).ok()?;
-    (bundled != installed).then_some(target_root)
-}
-
-fn show_skills_dialog(editor: &Rc<Editor>, window: Option<&gtk::Window>) {
-    let dialog = adw::AlertDialog::new(
-        Some("Install Agent Skills"),
-        Some("Install the dualcut agent skill so coding agents can edit your projects."),
-    );
-    dialog.add_response("agents", "~/.agents/skills");
-    dialog.add_response("claude", "~/.claude/skills");
-    dialog.add_response("choose", "Choose directory…");
-    dialog.add_response("cancel", "Cancel");
-    dialog.set_default_response(Some("claude"));
-    dialog.set_close_response("cancel");
-    let win = window.cloned();
-    let editor = editor.clone();
-    dialog.connect_response(None, move |d, response| {
-        let home = glib::home_dir();
-        let target = match response {
-            "agents" => Some(home.join(".agents/skills")),
-            "claude" => Some(home.join(".claude/skills")),
-            "choose" => {
-                let picker = gtk::FileDialog::builder().title("Choose Skill Directory").build();
-                let editor = editor.clone();
-                picker.select_folder(
-                    editor.window().as_ref(),
-                    gtk::gio::Cancellable::NONE,
-                    move |res| {
-                        if let Ok(dir) = res
-                            && let Some(path) = dir.path() {
-                                match install_skill_to(&path) {
-                                    Ok(dest) => println!("skill installed to {}", dest.display()),
-                                    Err(e) => eprintln!("skill install failed: {e:#}"),
-                                }
-                            }
-                    },
-                );
-                None
-            }
-            _ => None,
-        };
-        if let Some(target) = target {
-            match install_skill_to(&target) {
-                Ok(dest) => {
-                    let done = adw::AlertDialog::new(
-                        Some("Skill installed"),
-                        Some(&format!("Installed to {}", dest.display())),
-                    );
-                    done.add_response("ok", "OK");
-                    done.present(win.as_ref());
-                }
-                Err(e) => eprintln!("skill install failed: {e:#}"),
-            }
-        }
-        d.close();
-    });
-    dialog.present(window);
-}
 
 fn show_about(window: Option<&gtk::Window>) {
     let about = adw::AboutDialog::builder()
@@ -3423,14 +2690,6 @@ fn show_about(window: Option<&gtk::Window>) {
     about.present(window);
 }
 
-fn fx_hash(s: &str) -> u64 {
-    let mut h: u64 = 0xcbf29ce484222325;
-    for b in s.bytes() {
-        h ^= b as u64;
-        h = h.wrapping_mul(0x100000001b3);
-    }
-    h
-}
 
 #[cfg(feature = "scripting")]
 fn build_script_panel(editor: &Rc<Editor>) -> gtk::Box {
@@ -3496,14 +2755,7 @@ Types: engine/schema/dualcut.d.ts",
     page
 }
 
-fn export_target(dir: &std::path::Path, name: &str) -> String {
-    dir.join(name).display().to_string()
-}
 
-/// Kicks off (or queues) one render: (Export button, output path, profile).
-type StartRender = Rc<dyn Fn(gtk::Button, String, String)>;
-
-/// Land transcript segments on the `subtitles` overlay track (#37).
 fn apply_captions(editor: &Rc<Editor>, segments: &[(f64, f64, String)]) {
     let project = editor.state.borrow().project.clone();
     let Some(mut project) = project else { return };
@@ -3703,254 +2955,6 @@ fn show_captions_dialog(editor: &Rc<Editor>) {
     dialog.present(editor.window().as_ref());
 }
 
-fn show_export_dialog(editor: &Rc<Editor>, parent: Option<&gtk::Window>) {
-    let (project_json, base_dir, title) = {
-        let st = editor.state.borrow();
-        let Some(project) = st.project.as_ref() else { return };
-        (project.to_json(), editor.base_dir(), project.meta.title.clone())
-    };
-
-    let dialog = gtk::Window::builder()
-        .title("Export video")
-        .modal(true)
-        .default_width(420)
-        .build();
-    if let Some(parent) = parent {
-        dialog.set_transient_for(Some(parent));
-    }
-
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 10);
-    content.set_margin_top(14);
-    content.set_margin_bottom(14);
-    content.set_margin_start(14);
-    content.set_margin_end(14);
-
-    // Separate directory + file name (#27); name defaults to the project
-    // slug with a timestamp suffix so repeated exports never collide.
-    let slug: String = title
-        .chars()
-        .map(|c| if c.is_alphanumeric() { c.to_ascii_lowercase() } else { '-' })
-        .collect();
-    let stamp = glib::DateTime::now_local()
-        .ok()
-        .and_then(|d| d.format("%y%m%d_%H%M").ok())
-        .map(|s| s.to_string())
-        .unwrap_or_default();
-    let out_dir = Rc::new(std::cell::RefCell::new(base_dir.clone()));
-    let dir_btn = gtk::Button::with_label(&base_dir.display().to_string());
-    dir_btn.set_tooltip_text(Some("Choose output directory"));
-    {
-        let out_dir = out_dir.clone();
-        dir_btn.connect_clicked(move |btn| {
-            let picker = gtk::FileDialog::builder().title("Choose output directory").build();
-            let window = btn.root().and_downcast::<gtk::Window>();
-            let out_dir = out_dir.clone();
-            let btn = btn.clone();
-            picker.select_folder(window.as_ref(), gtk::gio::Cancellable::NONE, move |res| {
-                if let Ok(dir) = res
-                    && let Some(path) = dir.path() {
-                        btn.set_label(&path.display().to_string());
-                        *out_dir.borrow_mut() = path;
-                    }
-            });
-        });
-    }
-    let out_entry = gtk::Entry::new();
-    out_entry.set_text(&format!("{slug}_{stamp}.mp4"));
-    content.append(&gtk::Label::builder().label("Output directory").halign(gtk::Align::Start).build());
-    content.append(&dir_btn);
-    content.append(&gtk::Label::builder().label("File name").halign(gtk::Align::Start).build());
-    content.append(&out_entry);
-
-    let profile = gtk::DropDown::from_strings(&[
-        "mp4 (H.264/AAC)",
-        "webm (VP8/Vorbis)",
-        "mp4 (H.265/AAC)",
-        "webm (VP9/Opus)",
-        "mp4 (AV1/AAC)",
-        "mov (ProRes/PCM)",
-        "mkv (FFV1/FLAC lossless)",
-        "m4a (AAC audio)",
-        "ogg (Opus audio)",
-        "flac (audio)",
-        "mp3 (audio)",
-        "wav (audio)",
-    ]);
-    {
-        let out_entry = out_entry.clone();
-        profile.connect_selected_notify(move |dd| {
-            let ext = match dd.selected() {
-                1 | 3 => "webm",
-                5 => "mov",
-                6 => "mkv",
-                7 => "m4a",
-                8 => "ogg",
-                9 => "flac",
-                10 => "mp3",
-                11 => "wav",
-                _ => "mp4",
-            };
-            let text = out_entry.text().to_string();
-            if let Some(stem) = text.rsplit_once('.').map(|(s, _)| s.to_string()) {
-                out_entry.set_text(&format!("{stem}.{ext}"));
-            }
-        });
-    }
-    content.append(&gtk::Label::builder().label("Format").halign(gtk::Align::Start).build());
-    content.append(&profile);
-
-    let status = gtk::Label::new(None);
-    status.set_selectable(true);
-    status.set_wrap(true);
-    status.add_css_class("monospace");
-    let bar = gtk::ProgressBar::new();
-    bar.set_show_text(true);
-    bar.set_visible(false);
-    status.set_halign(gtk::Align::Start);
-    status.set_wrap(true);
-
-    let go = gtk::Button::with_label("Export");
-    go.add_css_class("suggested-action");
-    {
-        let status = status.clone();
-        let out_entry = out_entry.clone();
-        let profile = profile.clone();
-        // Self-referencing so a finished render can start the next queued
-        // export (#35); the cell is filled right after construction. The
-        // poll closure keeps everything alive even if the dialog closes,
-        // so renders (and the queue) survive closing the window.
-        let start_render_cell: Rc<RefCell<Option<StartRender>>> = Rc::new(RefCell::new(None));
-        let start_render: StartRender = {
-            let status = status.clone();
-            let bar = bar.clone();
-            let project_json = project_json.clone();
-            let base_dir = base_dir.clone();
-            let editor = editor.clone();
-            let cell = start_render_cell.clone();
-            Rc::new(move |btn: gtk::Button, out: String, prof: String| {
-                // A render is already running (possibly started from an
-                // earlier dialog): queue this one instead (#35).
-                if editor.exporting.get() {
-                    let queued = {
-                        let mut q = editor.export_queue.borrow_mut();
-                        q.push_back((out, prof));
-                        q.len()
-                    };
-                    status.set_text(&format!("Rendering… ({queued} queued)"));
-                    return;
-                }
-                editor.exporting.set(true);
-                status.set_text("Rendering…");
-                bar.set_visible(true);
-                bar.set_fraction(0.0);
-                let (tx, rx) = std::sync::mpsc::channel::<std::result::Result<(), String>>();
-                let (ptx, prx) = std::sync::mpsc::channel::<f64>();
-                {
-                    let project_json = project_json.clone();
-                    let base_dir = base_dir.clone();
-                    let out = out.clone();
-                    std::thread::spawn(move || {
-                        let result = dualcut_engine::render_project_with_progress(
-                            &project_json,
-                            &base_dir,
-                            &out,
-                            &prof,
-                            |p| {
-                                let _ = ptx.send(p);
-                            },
-                        )
-                        .map(|warnings| {
-                            for w in warnings {
-                                eprintln!("warning: {w}");
-                            }
-                        })
-                        .map_err(|e| format!("{e:#}"));
-                        let _ = tx.send(result);
-                    });
-                }
-                let status = status.clone();
-                let bar = bar.clone();
-                let editor = editor.clone();
-                let cell = cell.clone();
-                glib::timeout_add_local(std::time::Duration::from_millis(250), move || {
-                    while let Ok(p) = prx.try_recv() {
-                        bar.set_fraction(p);
-                    }
-                    match rx.try_recv() {
-                        Ok(Ok(())) => {
-                            status.set_text(&format!("✓ exported {out}"));
-                            bar.set_fraction(1.0);
-                            editor.toast(&format!("✓ exported {out}"));
-                        }
-                        Ok(Err(e)) => {
-                            // Mirror to the terminal so GUI and console
-                            // errors always match (#27).
-                            eprintln!("export failed: {e}");
-                            status.set_text(&format!("✗ {e}"));
-                            editor.toast(&format!("✗ export failed: {e}"));
-                        }
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {
-                            return glib::ControlFlow::Continue
-                        }
-                        Err(_) => {}
-                    }
-                    // Render finished (or died): start the next queued one.
-                    editor.exporting.set(false);
-                    let next = editor.export_queue.borrow_mut().pop_front();
-                    if let Some((next_out, next_prof)) = next
-                        && let Some(start) = cell.borrow().clone()
-                    {
-                        start(btn.clone(), next_out, next_prof);
-                    }
-                    glib::ControlFlow::Break
-                });
-            })
-        };
-        *start_render_cell.borrow_mut() = Some(start_render.clone());
-        go.connect_clicked(move |btn| {
-            let out = export_target(&out_dir.borrow(), out_entry.text().trim());
-            let prof = match profile.selected() {
-                1 => "webm",
-                2 => "h265",
-                3 => "vp9",
-                4 => "av1",
-                5 => "prores",
-                6 => "ffv1",
-                7 => "m4a",
-                8 => "ogg",
-                9 => "flac",
-                10 => "mp3",
-                11 => "wav",
-                _ => "mp4",
-            }
-            .to_string();
-            // Never silently clobber an existing file (#27).
-            if std::path::Path::new(&out).exists() {
-                let confirm = adw::AlertDialog::new(
-                    Some("Replace existing file?"),
-                    Some(&format!("{out} already exists.")),
-                );
-                confirm.add_response("cancel", "Cancel");
-                confirm.add_response("replace", "Replace");
-                confirm.set_response_appearance("replace", adw::ResponseAppearance::Destructive);
-                confirm.set_default_response(Some("cancel"));
-                let start_render = start_render.clone();
-                let btn2 = btn.clone();
-                confirm.connect_response(Some("replace"), move |_, _| {
-                    start_render(btn2.clone(), out.clone(), prof.clone());
-                });
-                confirm.present(btn.root().and_downcast::<gtk::Window>().as_ref());
-                return;
-            }
-            start_render(btn.clone(), out, prof);
-        });
-    }
-    content.append(&go);
-    content.append(&bar);
-    content.append(&status);
-    dialog.set_child(Some(&content));
-    dialog.present();
-}
 
 fn build_ui(app: &adw::Application) -> Result<()> {
     init()?;
@@ -5341,343 +4345,4 @@ fn build_ui(app: &adw::Application) -> Result<()> {
 /// pipeline/compile plumbing itself is plain functions with no GTK
 /// window needed, so these run under ordinary `cargo test`, not just
 /// manual GUI verification.
-#[cfg(test)]
-mod pipeline_tests {
-    use super::*;
 
-    /// Real `ges::Pipeline` + `gtk4paintablesink` construction isn't safe
-    /// to run concurrently across threads without a live GLib main loop --
-    /// two of these tests running in parallel (the `cargo test` default)
-    /// deadlock instead of failing, which silently hung CI for 6+ hours
-    /// until it was auto-cancelled (see the "Test coverage for the last
-    /// untested engine modules" CI run). Serialize them instead.
-    fn lock() -> std::sync::MutexGuard<'static, ()> {
-        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-        LOCK.lock().unwrap_or_else(|e| e.into_inner())
-    }
-
-    fn init_once() {
-        static ONCE: std::sync::Once = std::sync::Once::new();
-        ONCE.call_once(|| {
-            init().expect("gst/ges init");
-            // Real registration path build_ui uses -- make_pipeline needs
-            // "gtk4paintablesink" to exist at all (H4 in #57: what happens
-            // if the sink can't be created is exactly what's untested
-            // without this).
-            gstgtk4::plugin_register_static().expect("registering gtk4paintablesink");
-        });
-    }
-
-    fn empty_project(base_dir: &std::path::Path) -> (Project, PathBuf) {
-        let project = dualcut_engine::templates::new_project("pipeline-test");
-        (project, base_dir.to_path_buf())
-    }
-
-    /// H4: a normal, empty project compiles and its pipeline reaches
-    /// Paused -- the baseline `start_paused` is supposed to hit on every
-    /// healthy edit, so a regression here means *nothing* previews.
-    #[test]
-    fn make_pipeline_and_start_paused_succeed_for_a_normal_project() {
-        let _guard = lock();
-        init_once();
-        let dir = std::env::temp_dir().join("dualcut-pipeline-test-normal");
-        std::fs::create_dir_all(&dir).unwrap();
-        let (project, base_dir) = empty_project(&dir);
-        let timeline = compile_project(&project, &base_dir).expect("compiles");
-        let (pipeline, _paintable) = make_pipeline(&timeline).expect("pipeline builds");
-        start_paused(&pipeline).expect("a normal empty timeline should preroll cleanly");
-        let _ = pipeline.set_state(gst::State::Null);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// H1/#37 test-table row 3: a project referencing media that doesn't
-    /// exist on disk at all (not just an undecodable codec -- #45 covers
-    /// that) must still compile with a non-empty warning, not error out
-    /// and leave the caller with nothing to show the user.
-    #[test]
-    fn compile_project_with_warnings_reports_missing_media_instead_of_failing() {
-        init_once();
-        let dir = std::env::temp_dir().join("dualcut-pipeline-test-missing");
-        std::fs::create_dir_all(&dir).unwrap();
-        let mut project = dualcut_engine::templates::new_project("missing-media-test");
-        project.scenes[0].layers.push(document::Clip {
-            id: "gone".into(),
-            start: 0.0,
-            duration: 1.0,
-            element: document::Element::Video {
-                src: "does-not-exist.mp4".into(),
-                offset: 0.0,
-                volume: 1.0,
-                rate: 1.0,
-            },
-            transform: Default::default(),
-            animations: Vec::new(),
-            effects: Vec::new(),
-        });
-        let result = compile_project_with_warnings(&project, &dir);
-        let (_timeline, warnings) = result.expect("missing media should degrade, not error");
-        assert!(!warnings.is_empty(), "expected a warning about the missing file");
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Test-table row 4: before a pipeline has ever prerolled,
-    /// `query_position()` must return `None`, not a stale/zero value that
-    /// could be mistaken for a real position -- this is the exact
-    /// condition the stuck "0:00.0" timestamp and missing playhead in the
-    /// bug report trace back to.
-    #[test]
-    fn query_position_is_none_before_preroll() {
-        let _guard = lock();
-        init_once();
-        let dir = std::env::temp_dir().join("dualcut-pipeline-test-position");
-        std::fs::create_dir_all(&dir).unwrap();
-        let (project, base_dir) = empty_project(&dir);
-        let timeline = compile_project(&project, &base_dir).expect("compiles");
-        let (pipeline, _paintable) = make_pipeline(&timeline).expect("pipeline builds");
-        assert!(
-            pipeline.query_position::<gst::ClockTime>().is_none(),
-            "a never-started pipeline should report no position"
-        );
-        let _ = pipeline.set_state(gst::State::Null);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Test-table row 6: `with_proxies`/proxy-swap compilation must not
-    /// choke when the proxy cache is empty (the common case right after
-    /// opening a project, before the background thumbnail worker has run)
-    /// -- it should fall back to the original media, not fail the whole
-    /// compile.
-    #[test]
-    fn compile_project_works_with_no_proxy_cache_present() {
-        init_once();
-        let dir = std::env::temp_dir().join("dualcut-pipeline-test-noproxy");
-        std::fs::create_dir_all(&dir).unwrap();
-        // No .dualcut-cache directory at all -- proxy_path() checks will
-        // all miss, exercising the "proxies not built yet" fallback.
-        let (project, base_dir) = empty_project(&dir);
-        assert!(compile_project(&project, &base_dir).is_ok());
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Test-table row 1 (#57): transitioning a properly-prerolled
-    /// pipeline from Paused to Playing and back must succeed and return
-    /// the correct state-change result -- this is the path the play
-    /// button, spacebar, and arrow-key handlers exercise hundreds of
-    /// times per editing session.
-    #[test]
-    fn set_state_playing_from_paused_succeeds_for_normal_pipeline() {
-        let _guard = lock();
-        init_once();
-        let dir = std::env::temp_dir().join("dualcut-pipeline-test-playing");
-        std::fs::create_dir_all(&dir).unwrap();
-        let (project, base_dir) = empty_project(&dir);
-        let timeline = compile_project(&project, &base_dir).expect("compiles");
-        let (pipeline, _paintable) = make_pipeline(&timeline).expect("pipeline builds");
-        start_paused(&pipeline).expect("normal project preroolls");
-        // Transition Paused → Playing must succeed.
-        assert!(pipeline.set_state(gst::State::Playing).is_ok());
-        // Transition Playing → Paused must also succeed.
-        assert!(pipeline.set_state(gst::State::Paused).is_ok());
-        let _ = pipeline.set_state(gst::State::Null);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    /// Test-table row 2 (#57): `start_paused`, teardown via
-    /// `set_state(Null)`, and a second `start_paused` must all succeed
-    /// without error -- this is the cycle that `swap_pipeline` and
-    /// `rebuild` perform on every document edit. A regression here means
-    /// the preview silently dies after the first edit.
-    #[test]
-    fn start_paused_null_start_paused_cycle_succeeds() {
-        let _guard = lock();
-        init_once();
-        let dir = std::env::temp_dir().join("dualcut-pipeline-test-cycle");
-        std::fs::create_dir_all(&dir).unwrap();
-        let (project, base_dir) = empty_project(&dir);
-        let timeline = compile_project(&project, &base_dir).expect("compiles");
-        let (pipeline, _paintable) = make_pipeline(&timeline).expect("pipeline builds");
-        start_paused(&pipeline).expect("first preroll");
-        let _ = pipeline.set_state(gst::State::Null);
-        // Position must vanish after Null reset (the stuck-timestamp bug
-        // in #57 depended on this invariant holding).
-        assert!(pipeline.query_position::<gst::ClockTime>().is_none());
-        start_paused(&pipeline).expect("second preroll after Null");
-        let _ = pipeline.set_state(gst::State::Null);
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-}
-
-/// #58: pure geometry/timeline-math helpers and small utility functions
-/// with no GTK dependency -- plain `cargo test`, no display needed.
-#[cfg(test)]
-mod pure_tests {
-    use super::*;
-
-    fn test_clip(id: &str, start: f64, duration: f64) -> document::Clip {
-        document::Clip {
-            id: id.into(),
-            start,
-            duration,
-            element: document::Element::Video {
-                src: "clip.mp4".into(),
-                offset: 0.0,
-                volume: 1.0,
-                rate: 1.0,
-            },
-            transform: Default::default(),
-            animations: Vec::new(),
-            effects: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn clip_box_falls_back_to_project_canvas_size_when_transform_is_zero() {
-        let project = dualcut_engine::templates::new_project("t");
-        let clip = test_clip("c1", 0.0, 1.0);
-        let (x, y, w, h) = clip_box(&project, &clip);
-        assert_eq!((x, y, w, h), (0.0, 0.0, 1920.0, 1080.0));
-    }
-
-    #[test]
-    fn clip_box_uses_explicit_transform_when_set() {
-        let project = dualcut_engine::templates::new_project("t");
-        let mut clip = test_clip("c1", 0.0, 1.0);
-        clip.transform = document::Transform { x: 10.0, y: 20.0, width: 300.0, height: 200.0, opacity: 1.0 };
-        assert_eq!(clip_box(&project, &clip), (10.0, 20.0, 300.0, 200.0));
-    }
-
-    #[test]
-    fn active_clips_at_finds_scene_layers_within_their_time_window() {
-        let mut project = dualcut_engine::templates::new_project("t");
-        project.scenes[0].layers.push(test_clip("scene-clip", 1.0, 2.0));
-        assert!(active_clips_at(&project, 0.5).is_empty());
-        let hits = active_clips_at(&project, 1.5);
-        assert_eq!(hits.len(), 1);
-        assert_eq!(hits[0].0, "scene-clip");
-        assert!(active_clips_at(&project, 3.0).is_empty());
-    }
-
-    #[test]
-    fn active_clips_at_finds_overlay_clips_by_absolute_time_across_scenes() {
-        let mut project = dualcut_engine::templates::new_project("t");
-        project.scenes.push(document::Scene {
-            id: "scene-2".into(),
-            name: String::new(),
-            duration: 5.0,
-            transition: None,
-            layers: Vec::new(),
-        });
-        project.overlays.push(document::OverlayTrack {
-            id: "ov".into(),
-            muted: false,
-            hidden: false,
-            locked: false,
-            name: String::new(),
-            clips: vec![test_clip("overlay-clip", 6.0, 1.0)],
-        });
-        // 6s falls in scene 2 (scene 1 spans 0..5), not scene 1 -- overlays
-        // use absolute time regardless of which scene is "under" them.
-        assert!(active_clips_at(&project, 0.5).iter().all(|c| c.0 != "overlay-clip"));
-        let hits = active_clips_at(&project, 6.5);
-        assert!(hits.iter().any(|c| c.0 == "overlay-clip"));
-    }
-
-    #[test]
-    fn active_clips_at_overlays_come_before_scene_layers() {
-        let mut project = dualcut_engine::templates::new_project("t");
-        project.scenes[0].layers.push(test_clip("scene-clip", 0.0, 5.0));
-        project.overlays.push(document::OverlayTrack {
-            id: "ov".into(),
-            muted: false,
-            hidden: false,
-            locked: false,
-            name: String::new(),
-            clips: vec![test_clip("overlay-clip", 0.0, 5.0)],
-        });
-        let hits = active_clips_at(&project, 1.0);
-        assert_eq!(hits.len(), 2);
-        assert_eq!(hits[0].0, "overlay-clip", "overlays should be topmost");
-    }
-
-    #[test]
-    fn widget_to_comp_maps_widget_coords_through_letterboxing() {
-        let project = dualcut_engine::templates::new_project("t"); // 1920x1080
-        // A 1920x1080 comp in a 960x1080 widget (2:1 taller-than-video
-        // widget) is scaled by 0.5 to 960x540, letterboxed top/bottom.
-        let (cx, cy, scale) = widget_to_comp(&project, 960.0, 1080.0, 480.0, 270.0 + 270.0)
-            .expect("center of the video area maps to a composition point");
-        assert_eq!(scale, 0.5);
-        assert!((cx - 960.0).abs() < 0.01);
-        assert!((cy - 540.0).abs() < 0.01);
-    }
-
-    #[test]
-    fn widget_to_comp_returns_none_outside_the_letterboxed_video_area() {
-        let project = dualcut_engine::templates::new_project("t");
-        // Same 960x1080 widget as above: the video occupies y in
-        // [270, 810], so y=10 lands in the top letterbox bar.
-        assert!(widget_to_comp(&project, 960.0, 1080.0, 480.0, 10.0).is_none());
-    }
-
-    #[test]
-    fn snap_time_snaps_to_a_nearby_scene_boundary() {
-        let mut project = dualcut_engine::templates::new_project("t"); // scene 1: 0..5
-        project.scenes.push(document::Scene {
-            id: "scene-2".into(),
-            name: String::new(),
-            duration: 5.0,
-            transition: None,
-            layers: Vec::new(),
-        });
-        assert_eq!(snap_time(&project, 5.05), 5.0);
-    }
-
-    #[test]
-    fn snap_time_falls_back_to_the_half_second_grid_far_from_any_boundary() {
-        let project = dualcut_engine::templates::new_project("t");
-        assert_eq!(snap_time(&project, 2.4), 2.5);
-    }
-
-    #[test]
-    fn snap_time_never_returns_negative() {
-        let project = dualcut_engine::templates::new_project("t");
-        assert_eq!(snap_time(&project, -1.0), 0.0);
-    }
-
-    #[test]
-    fn export_target_joins_dir_and_name() {
-        let dir = std::path::Path::new("/tmp/out");
-        assert_eq!(export_target(dir, "video.mp4"), "/tmp/out/video.mp4");
-    }
-
-    #[test]
-    fn fx_hash_is_deterministic_and_distinguishes_inputs() {
-        assert_eq!(fx_hash("hello"), fx_hash("hello"));
-        assert_ne!(fx_hash("hello"), fx_hash("world"));
-        assert_ne!(fx_hash(""), fx_hash("a"));
-    }
-
-    #[test]
-    fn media_uri_passes_through_an_existing_uri_unchanged() {
-        let base = std::path::Path::new("/does/not/matter");
-        assert_eq!(media_uri("file:///already/a/uri.mp4", base), Some("file:///already/a/uri.mp4".into()));
-        assert_eq!(media_uri("https://example.com/a.mp4", base), Some("https://example.com/a.mp4".into()));
-    }
-
-    #[test]
-    fn media_uri_resolves_an_existing_relative_path_to_a_file_uri() {
-        let dir = std::env::temp_dir().join("dualcut-media-uri-test");
-        std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("clip.mp4"), b"fake").unwrap();
-        let uri = media_uri("clip.mp4", &dir).expect("existing relative path resolves");
-        assert!(uri.starts_with("file://"));
-        assert!(uri.ends_with("clip.mp4"));
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn media_uri_returns_none_for_a_relative_path_that_does_not_exist() {
-        let base = std::env::temp_dir();
-        assert_eq!(media_uri("this-file-does-not-exist-anywhere.mp4", &base), None);
-    }
-}
