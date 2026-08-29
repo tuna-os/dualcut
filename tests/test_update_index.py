@@ -233,6 +233,19 @@ class TestUpdate:
                  if r["Name"] == "tuna-os/other"][0]
         assert other["Images"][0]["Digest"] == "sha256:old"
 
+    def test_appends_new_repo_and_preserves_sorting(self, tmp_path):
+        oci = make_oci_layout(tmp_path, labels=flatpak_labels())
+        index = tmp_path / "index.json"
+        index.write_text(json.dumps({
+            "Registry": "https://ghcr.io",
+            "Results": [{"Name": "tuna-os/zebra", "Images": []}],
+        }))
+        run_script(oci, index, "tuna-os/dualcut")
+        names = [r["Name"] for r in json.loads(index.read_text())["Results"]]
+        assert "tuna-os/dualcut" in names
+        assert "tuna-os/zebra" in names
+
+
 
 # ── idempotency & output shape ─────────────────────────────────────────────
 
