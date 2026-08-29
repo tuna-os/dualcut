@@ -154,6 +154,28 @@ class TestCreate:
         data = json.loads(index.read_text())
         assert data["Registry"] == "https://ghcr.io/example"
 
+    def test_custom_registry_with_http_scheme(self, tmp_path):
+        oci = make_oci_layout(tmp_path, labels=flatpak_labels())
+        index = tmp_path / "index.json"
+        res = run_script(oci, index, "tuna-os/dualcut", registry="http://ghcr.io/example")
+        assert res.returncode == 0, res.stderr
+        data = json.loads(index.read_text())
+        assert data["Registry"] == "https://ghcr.io/example"
+
+    def test_preserves_appstream_labels(self, tmp_path):
+        labels = flatpak_labels({
+            "org.freedesktop.appstream.name": "Dualcut",
+            "org.freedesktop.appstream.icon": "org.example.Dualcut.png",
+        })
+        oci = make_oci_layout(tmp_path, labels=labels)
+        index = tmp_path / "index.json"
+        res = run_script(oci, index, "tuna-os/dualcut")
+        assert res.returncode == 0, res.stderr
+        img_labels = json.loads(index.read_text())["Results"][0]["Images"][0]["Labels"]
+        assert img_labels.get("org.freedesktop.appstream.name") == "Dualcut"
+        assert img_labels.get("org.freedesktop.appstream.icon") == "org.example.Dualcut.png"
+
+
 
 # ── update semantics (the two publish invocations) ─────────────────────────
 
@@ -230,3 +252,21 @@ class TestIdempotency:
         raw = index.read_text()
         assert raw.endswith("\n")
         assert '  "Registry"' in raw  # indent=2
+
+
+# ── registry scheme normalization ──────────────────────────────────────────
+
+class TestRegistrySchemeNormalization:
+    def test_scheme_prefixed_registry_is_normalized(self, tmp_path):
+        for registry_arg, expected_url in [
+            ("https://ghcr.io", "https://ghcr.io"),
+            ("http://registry.local:5000", "https://registry.local:5000"),
+            ("ghcr.io", "https://ghcr.io"),
+        ]:
+            oci = make_oci_layout(tmp_path, labels=flatpak_labels())
+            index = tmp_path / f"index_{registry_arg.replace('/', '_').replace(':', '_')}.json"
+            res = run_script(oci, index, "tuna-os/dualcut", registry=registry_arg)
+            assert res.returncode == 0
+            data = json.loads(index.read_text())
+            assert data["Registry"] == expected_url, f"Expected {expected_url} for input {registry_arg}, got {data['Registry']}"
+
