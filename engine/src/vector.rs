@@ -482,12 +482,9 @@ pub fn shape_png_maybe_inverted(
     if invert {
         let argb = parse_color(fill_hex);
         let (r, g, b) = (((argb >> 16) & 0xff) as u8, ((argb >> 8) & 0xff) as u8, (argb & 0xff) as u8);
-        for px in pixels.chunks_exact_mut(4) {
-            if px[3] == 0 {
-                px.copy_from_slice(&[r, g, b, 255]);
-            } else {
-                px.copy_from_slice(&[0, 0, 0, 0]);
-            }
+        let (px_chunks, _rest) = pixels.as_chunks_mut::<4>();
+        for px in px_chunks {
+            *px = if px[3] == 0 { [r, g, b, 255] } else { [0, 0, 0, 0] };
         }
     }
     let mut img = image::RgbaImage::from_raw(width, height, pixels).context("image from raw")?;
