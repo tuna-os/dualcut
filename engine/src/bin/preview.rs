@@ -4340,9 +4340,3 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     Ok(())
 }
 
-/// Coverage for the failure paths (#57) that used to be silently
-/// discarded with `let _ = ...` at every live-playback call site: the
-/// pipeline/compile plumbing itself is plain functions with no GTK
-/// window needed, so these run under ordinary `cargo test`, not just
-/// manual GUI verification.
-
