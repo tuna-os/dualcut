@@ -56,7 +56,7 @@ use history::{diff_summary, take_agent_marker, EditSource, HistoryEntry};
 mod coords;
 
 use coords::{
-    active_clips_at, clip_box, failed_proxies, failed_templates, failed_thumbs, fx_hash, media_uri,
+    active_clips_at, failed_proxies, failed_templates, failed_thumbs, fx_hash, media_uri,
     snap_time, widget_to_comp,
 };
 
@@ -64,22 +64,22 @@ use coords::{
 mod pipeline;
 
 use pipeline::{
-    compile_project, compile_project_with_warnings, compile_project_with_warnings_cache,
-    make_pipeline, seek_to, start_paused, with_proxies,
+    compile_project, compile_project_with_warnings_cache,
+    make_pipeline, seek_to, start_paused,
 };
 
 #[path = "preview/skills.rs"]
 mod skills;
 
 use skills::{
-    copy_dir_recursive, install_skill_to, show_skills_dialog, skill_source_dir,
+    install_skill_to, show_skills_dialog,
     skill_update_available,
 };
 
 #[path = "preview/export.rs"]
 mod export;
 
-use export::{export_target, show_export_dialog, StartRender};
+use export::show_export_dialog;
 
 const DEFAULT_PPS: f64 = 42.0;
 /// Fixed width of a timeline lane's icon+label+toggles column. Shared by
