@@ -1,5 +1,10 @@
 # Contributing to dualcut
 
+> **Deprecation notice:** New development has moved to
+> [shrimply](https://github.com/soirihiroka/shrimply). Please port useful
+> ideas there instead of starting new feature work in this repository. See
+> [DEPRECATED.md](DEPRECATED.md).
+
 Thanks for helping with **dualcut** — the GNOME video editor with dual usage:
 edit manually in the timeline/inspector, or programmatically via a live JSON
 document, TypeScript scripts, and an HTTP API.
