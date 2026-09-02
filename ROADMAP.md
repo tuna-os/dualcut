@@ -41,7 +41,7 @@ The next release candidate should satisfy all of the following:
 - [ ] Triage every open user-facing issue into the Beta gate, a later horizon,
   or an explicit deferral.
 - [ ] Resolve or explicitly defer the four gaps listed in `PARITY.md`:
-  keyframed speed ramps, richer caption-model management, freeform masks, and
+  un-shipped keyframed speed ramps (constant rate supported; ramping requires clip segmentation), richer caption-model management, freeform masks, and
   full color grading.
 - [ ] Recruit at least five early users outside the core maintainer/agent loop;
   capture install outcome, first export outcome, crash reports, and the three
