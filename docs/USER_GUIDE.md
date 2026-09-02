@@ -74,7 +74,19 @@ scenes, retiming clips, generating layers from data.
 Select a clip in the timeline, preview, or Inspect list to edit its
 timing, transform, and text; add animation presets (fades, slides,
 audio fades) or hand-tune keyframes per property; stack **effects**
-(blur, color) with live parameter spinners.
+(blur, color adjustment, chroma key, crop, freeform shape mask, audio EQ,
+compressor, and denoise) with live parameter controls. Effects that do not
+apply to the selected clip type are skipped with a render warning.
+
+Video and audio clips also have a **playback rate** control. Use a constant
+rate for a uniform speed change, or add two or more `rate` keyframes for a
+speed ramp. Rate ramps are compiled into static-rate segments at the
+keyframes, so use keyframes rather than a tween animation for this property.
+
+A freeform shape mask limits a video or test clip to a vector shape, with
+optional feathering and inversion. Dualcut bakes the result into an
+alpha-channel file under the project's `.dualcut-cache/`; the first preview or
+export is therefore slower, while later renders reuse the cached result.
 
 ![Clip inspector](guide/clip-inspector.png)
 

@@ -43,8 +43,8 @@ Legend: ✅ solid · 🟡 partial/basic · ❌ absent · — not applicable
 | Scene transitions (wipes etc.) | ✅ | ✅ | ✅ | ✅ (6 kinds) | ✅ |
 | Effects (blur, color) | ✅ | 🟡 | ✅ | ✅ | ✅ |
 | Full color grading | ✅ | 🟡 | ✅ | ❌ | 🟡 (videobalance) |
-| Masks / chroma key | ✅ | ✅ | ✅ | ✅ (chroma key + crop) | ✅ |
-| Speed ramping | ✅ | ✅ | ✅ | 🟡 (constant rate) | 🟡 (constant; ramps need segmentation, #40) |
+| Masks / chroma key | ✅ | ✅ | ✅ | ✅ (chroma key + crop + shape masks) | ✅ (masks bake + cache) |
+| Speed ramping | ✅ | ✅ | ✅ | ✅ (rate keyframes) | ✅ (segmented at keyframes) |
 | Vector shapes | 🟡 (stickers) | ❌ | 🟡 | ✅ (7 shapes, live GPU) | ✅ (`vello://`) |
 
 ## Text & templates
@@ -94,22 +94,23 @@ Legend: ✅ solid · 🟡 partial/basic · ❌ absent · — not applicable
 
 ## Remaining gaps
 
-1. **Keyframed speed ramps** — constant rate ships; ramping needs
-   clip segmentation (#40), not live GES property binding (unsafe,
-   root-caused).
-2. **Auto-captions bundling** — closed for the Flatpak (#37): the
-   manifest builds a CPU-only whisper.cpp (`whisper-cli`, static,
-   no CUDA/Metal/BLAS) and bundles a ggml tiny.en q5_1 model
-   (~31MB), so *Generate Captions…* works with no external install.
-   `DUALCUT_WHISPER_MODEL` still overrides with a bigger/different
-   model. Non-Flatpak builds still need a whisper.cpp install on
-   PATH — a future "download a better model" option could layer
-   on top of the bundled default.
-3. **Bezier/freeform masks** — chroma key + rectangular crop ship;
-   freeform masks are blocked on a real GES limitation: effect bins
-   reject multi-source pipelines (matte + video composited via
-   alphacombine), confirmed with a pixel-level no-op proof, not a
-   syntax issue. Root cause and fix direction (track/layer-level
-   compositing instead of a GESEffect) on #41.
-4. **Full color grading** — basic balance only; curves/wheels are a
-   bigger project.
+1. **Auto-captions model management** — the Flatpak bundles a CPU-only
+   whisper.cpp (`whisper-cli`) and a ggml tiny.en q5_1 model (#37), so
+   *Generate Captions…* works without an external install. A future model
+   manager could make larger or multilingual models discoverable; today,
+   `DUALCUT_WHISPER_MODEL` selects a different local model. Non-Flatpak builds
+   still need whisper.cpp on `PATH`.
+2. **Full color grading** — basic balance only; curves/wheels are a bigger
+   project.
+
+## Implementation notes for shipped workarounds
+
+- **Keyframed speed ramps** ship through deterministic segmentation (#40):
+  the document retains the rate curve, while compilation expands it into
+  static-rate sub-clips before GES sees it. Live GES rate-property binding is
+  unsafe, so tween-style rate animations remain unsupported; use keyframes.
+- **Freeform shape masks** ship through a cached alpha-channel bake (#41).
+  GES effect bins cannot accept the mask and video as two sources, so Dualcut
+  rasterizes the shape, bakes the masked clip, and then composites that normal
+  alpha video on the timeline. This is slower on first render and requires the
+  `vector` feature, but subsequent renders reuse the cache.

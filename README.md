@@ -72,7 +72,9 @@ for the canonical dependency list.
 - Scene-based editing with crossfade transitions and overlay tracks
 - Text, video, audio, image clips + GPU vector shapes (rect, circle,
   ellipse, star, polygon, line, arrow)
-- Tweened animations (x/y/opacity, easing) compiled to GStreamer control sources
+- Tweened and keyframed animations (position, size, opacity, volume, and
+  playback rate) compiled to GStreamer control sources
+- Crop, chroma key, color, audio, and freeform shape-mask effects
 - Reusable parameterised templates (lower third, title card, caption built in)
 - Detach audio, undo/redo, multi-select, first-frame thumbnails
 - TypeScript scripting in-app and over HTTP (`export function edit(p) {…}`)
@@ -85,4 +87,3 @@ open work: [issues](https://github.com/tuna-os/dualcut/issues)
 ## License
 
 GPL-3.0-only — see [LICENSE](LICENSE).
-
