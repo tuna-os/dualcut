@@ -98,7 +98,7 @@ mod tests {
             id: "c1".into(),
             start: 0.0,
             duration: 1.0,
-            element: document::Element::Color { color: "#ffffff".into() },
+            element: document::Element::Test {},
             transform: Default::default(),
             animations: Vec::new(),
             effects: Vec::new(),
