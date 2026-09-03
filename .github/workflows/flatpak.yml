@@ -41,7 +41,7 @@ jobs:
             -o engine/build-aux/cargo-sources.json
 
       - name: Build bundle
-        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.7
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
         with:
           bundle: ${{ matrix.bundle }}
           manifest-path: engine/build-aux/org.tunaos.dualcut.json
