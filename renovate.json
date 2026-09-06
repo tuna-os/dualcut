@@ -27,6 +27,16 @@
       ],
       "allowedVersions": "=1.0.219",
       "description": "serde >=1.0.227 removed the `__private` module that transitive dep swc_common 9.2.0 imports (E0432 unresolved import), breaking the build. Pinned to the Cargo.toml working version; re-enable once swc_common is bumped."
+    },
+    {
+      "matchPackageNames": [
+        "pango",
+        "pango-sys",
+        "pangocairo",
+        "pangocairo-sys"
+      ],
+      "allowedVersions": "<0.22.9",
+      "description": "pango 0.22.9 needs pango-sys 0.22.9 (PANGO_FONT_MASK_WIDTH), which depends on system-deps 9 -> toml 1 -> serde_core 1.0.225 -> serde_derive =1.0.225; that conflicts with the serde =1.0.219 pin above (serde >=1.0.220 drops serde::__private, breaking swc_common 9.2.0). Bumping pango alone (#147) leaves pango-sys at 0.22.0 and fails clippy with E0425. Lift together with the serde pin once rustyscript/swc_common is bumped."
     }
   ]
 }
