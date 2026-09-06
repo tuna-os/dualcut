@@ -58,7 +58,7 @@ Dualcut exposes an HTTP server interface for remote JSON project manipulation an
 | :--- | :--- | :--- |
 | **Flatpak Launch** | GTK application construct & window initialization | `flatpak run org.tunaos.dualcut --gapplication-service` |
 | **GStreamer Pipeline** | GES element availability & encoder plugins | `gst-inspect-1.0 ges` |
-| **HTTP Agent API** | Local HTTP server response | `curl -f http://localhost:8080/healthz` (when agent API is active) |
+| **HTTP Agent API** | Local HTTP server response | `curl -f http://localhost:8080/status` (when agent API is active) |
 | **Project Schema** | JSON project structure validation | `python3 -m json.tool project.json` |
 
 ---

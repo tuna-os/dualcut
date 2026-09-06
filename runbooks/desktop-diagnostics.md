@@ -83,7 +83,7 @@ GST_DEBUG=3,ges:5 flatpak run org.tunaos.dualcut
      ```
   2. Test health endpoint:
      ```bash
-     curl -i http://127.0.0.1:8080/healthz
+     curl -i http://127.0.0.1:8080/status
      ```
 * **Remediation**: Reconfigure API server port in preferences or launch with `--api-port=<PORT>`.
 
