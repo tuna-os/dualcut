@@ -2979,7 +2979,7 @@ fn build_ui(app: &adw::Application) -> Result<()> {
     loading_content.set_halign(gtk::Align::Center);
     loading_content.append(&spinner);
     loading_content.append(&label);
-    loading.set_child(Some(&loading_content));
+    loading.set_content(Some(&loading_content));
     loading.present();
 
     let arg = std::env::args().nth(1);
