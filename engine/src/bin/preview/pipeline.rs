@@ -11,18 +11,19 @@ use super::*;
 pub(crate) fn make_pipeline(timeline: &ges::Timeline) -> Result<(ges::Pipeline, gtk::gdk::Paintable)> {
     let pipeline = ges::Pipeline::new();
     pipeline.set_timeline(timeline).context("attaching timeline")?;
+    // Bare gtk4paintablesink only. Wrapping it in glsinkbin looked like an
+    // optimization (zero-copy GL upload), but in a GTK process glsinkbin's
+    // internal glupload fails to negotiate with the sink when GES feeds
+    // system-memory caps: the bin errors at preroll ("Failed to link sink
+    // element"), preview_set_video_sink rejects it, and the pipeline dies
+    // before the first frame -- black preview, no position, dead transport
+    // (sinkprobe bisect: wrap always fails, bare sink always prerolls).
+    // The paintablesink already handles system-memory caps itself.
     let sink = gst::ElementFactory::make("gtk4paintablesink")
         .build()
         .context("creating gtk4paintablesink")?;
     let paintable = sink.property::<gtk::gdk::Paintable>("paintable");
-    let video_sink: gst::Element = match gst::ElementFactory::make("glsinkbin")
-        .property("sink", &sink)
-        .build()
-    {
-        Ok(glsink) => glsink,
-        Err(_) => sink.clone(),
-    };
-    pipeline.preview_set_video_sink(Some(&video_sink));
+    pipeline.preview_set_video_sink(Some(&sink));
     Ok((pipeline, paintable))
 }
 
