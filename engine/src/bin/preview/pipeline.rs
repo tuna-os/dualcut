@@ -11,14 +11,18 @@ use super::*;
 pub(crate) fn make_pipeline(timeline: &ges::Timeline) -> Result<(ges::Pipeline, gtk::gdk::Paintable)> {
     let pipeline = ges::Pipeline::new();
     pipeline.set_timeline(timeline).context("attaching timeline")?;
-    // Bare gtk4paintablesink only. Wrapping it in glsinkbin looked like an
-    // optimization (zero-copy GL upload), but in a GTK process glsinkbin's
-    // internal glupload fails to negotiate with the sink when GES feeds
-    // system-memory caps: the bin errors at preroll ("Failed to link sink
-    // element"), preview_set_video_sink rejects it, and the pipeline dies
-    // before the first frame -- black preview, no position, dead transport
-    // (sinkprobe bisect: wrap always fails, bare sink always prerolls).
-    // The paintablesink already handles system-memory caps itself.
+    // Keep the sink bare, with no glsinkbin wrapper. A wrapper looks like a
+    // zero-copy GL optimization, but it breaks preroll in a GTK process. GES
+    // sends system-memory caps, and the glupload in glsinkbin does not
+    // negotiate with the sink. The bin then errors at preroll with "Failed to
+    // link sink element", and preview_set_video_sink rejects it. The pipeline
+    // never reaches Paused.
+    //
+    // Symptoms: black preview, no position, a play button that toggles
+    // without playback. A bisect on GStreamer 1.26.11 isolates the wrapper.
+    // With GES caps, the wrapped sink fails every time; the bare sink
+    // prerolls every time. The paintablesink does its own GL upload, so the
+    // wrapper adds nothing.
     let sink = gst::ElementFactory::make("gtk4paintablesink")
         .build()
         .context("creating gtk4paintablesink")?;
