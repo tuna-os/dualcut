@@ -30,55 +30,40 @@ use std::rc::Rc;
 use std::time::SystemTime;
 
 
-#[path = "preview/captions.rs"]
 mod captions;
-
 use captions::{find_whisper, find_whisper_model, run_captions_job};
 
-#[path = "preview/prefs.rs"]
 mod prefs;
-
 use prefs::{
     apply_default_font_family, load_recents, prefs_default_font_family, prefs_file, prefs_set,
     prefs_set_default_font_family, prefs_set_preview_scale, prefs_set_show_script,
     prefs_set_use_proxies, prefs_show_script, prefs_use_proxies, preview_scale, remember_recent,
 };
 
-#[path = "preview/keys.rs"]
 mod keys;
 
-#[path = "preview/history.rs"]
 mod history;
-
 use history::{diff_summary, take_agent_marker, EditSource, HistoryEntry};
 
-#[path = "preview/coords.rs"]
 mod coords;
-
 use coords::{
     active_clips_at, failed_proxies, failed_templates, failed_thumbs, fx_hash, media_uri,
     snap_time, widget_to_comp,
 };
 
-#[path = "preview/pipeline.rs"]
 mod pipeline;
-
 use pipeline::{
     compile_project, compile_project_with_warnings_cache,
     make_pipeline, seek_to, start_paused,
 };
 
-#[path = "preview/skills.rs"]
 mod skills;
-
 use skills::{
     install_skill_to, show_skills_dialog,
     skill_update_available,
 };
 
-#[path = "preview/export.rs"]
 mod export;
-
 use export::show_export_dialog;
 
 const DEFAULT_PPS: f64 = 42.0;
