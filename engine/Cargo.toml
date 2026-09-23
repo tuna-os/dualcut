@@ -39,7 +39,7 @@ path = "src/bin/render.rs"
 
 [[bin]]
 name = "preview"
-path = "src/bin/preview.rs"
+path = "src/bin/preview/main.rs"
 required-features = ["preview"]
 
 [[bin]]
