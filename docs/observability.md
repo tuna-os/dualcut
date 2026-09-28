@@ -1,41 +1,53 @@
-# Dualcut Observability & Operational Readiness Assessment
+# Dualcut Observability & Operational Readiness
 
-This document details the operational readiness, logging infrastructure, diagnostic signals, and operational guidelines for Dualcut (`org.tunaos.dualcut`).
+This document details the operational readiness, logging infrastructure, diagnostic signals, and observability guidelines for Dualcut (`org.tunaos.dualcut`).
 
----
-
-## 1. Executive Summary & Maintenance Posture
+## Executive Summary
 
 - **Component Name**: Dualcut (`org.tunaos.dualcut`)
-- **Architecture**: GTK4 / Libadwaita desktop video editor built with PyGObject, GStreamer Editing Services (GES), and Vello. Includes an embedded HTTP API server for agentic automation and script execution.
-- **Maintenance Status**: Legacy / Maintenance mode (Active development transitioning to `shrimply`).
-- **Distribution**: Flathub and TunaOS OCI Flatpak Registry (`oci+https://tuna-os.github.io/flatpak-index`).
+- **Architecture**: Rust-based GNOME video editor built with GTK4, Libadwaita, GStreamer Editing Services (GES), and Vello. Includes an embedded HTTP API server for agentic automation and script execution.
+- **Maintenance Status**: Active (with development focus transitioning to `shrimply` for new features).
+- **Distribution**: Flatpak (TunaOS OCI registry and direct releases).
 
----
+## Telemetry & Data Policy
 
-## 2. Telemetry & Data Flow Policy
+**No external telemetry backends are configured or authorized.** All application diagnostics and session logs remain strictly local. The system is designed with privacy-first observability:
 
-- **Managed Observability Target**: Zero external telemetry backends configured.
-- **Data Flow Policy**: No automated remote metrics collection or off-device telemetry transmission is enabled. All application diagnostics and session logs remain strictly on the local machine.
-- **Dependencies**: GStreamer plugin pipeline, PyGObject, GLib main loop, local HTTP agent server.
+- HTTP API is bound exclusively to `127.0.0.1` (localhost)
+- No external metrics export or remote telemetry transmission
+- GStreamer debug output stays on the local machine
+- Project documents are never sent outside the local system
 
----
+### Future Telemetry Considerations
 
-## 3. Diagnostic Signal Sources
+Should an operational backend be designated in the future, the following architecture is recommended:
 
-### 3.1 Session & Systemd Journal Logs
-When running as a user service or Flatpak app, session logs flow through standard output (`stdout`/`stderr`) to the systemd journal:
+1. **OpenTelemetry Rust Tracing** (`tracing-opentelemetry`):
+   - Instrument long-running tasks: project rendering, silence detection, script execution
+   - Use bounded span attributes (project ID hashes, clip format, pipeline state transitions)
+   - **Never** export raw user content or file paths
+
+2. **Metrics Collection**:
+   - Expose operational metrics (export duration, frames rendered, pipeline init latency) only via local, pull-based endpoints (e.g., `/metrics` on localhost)
+   - Use standard event listeners where applicable
+
+## Diagnostic Signal Sources
+
+### Systemd Journal & Flatpak Logs
+
+When running as a Flatpak, session logs flow through standard output/stderr to systemd journal:
 
 ```bash
 # Stream live logs for Dualcut
 journalctl --user -f -u org.tunaos.dualcut
 
-# Retrieve recent error events
+# Retrieve recent error events (last hour)
 journalctl --user-unit=org.tunaos.dualcut --since "1 hour ago" -p err
 ```
 
-### 3.2 GStreamer & GLib Diagnostic Logging
-GStreamer pipelines emit rich diagnostic channels configured via environment variables:
+### GStreamer & GLib Debug Logging
+
+GStreamer pipelines emit rich diagnostic channels via environment variables:
 
 ```bash
 # Debug GStreamer Editing Services (GES) and video rendering
@@ -45,25 +57,46 @@ GST_DEBUG=2,ges:4,gespipeline:5 flatpak run org.tunaos.dualcut
 G_MESSAGES_DEBUG=all flatpak run org.tunaos.dualcut
 ```
 
-### 3.3 HTTP Agent API Diagnostics
-Dualcut exposes an HTTP server interface for remote JSON project manipulation and automated timeline scripting:
-- Access logs and API errors print directly to standard stderr.
-- Health check endpoints verify main loop responsiveness and active project document state.
+Common `GST_DEBUG` levels: 0=none, 1=error, 2=warning, 3=fixme, 4=info, 5=debug, 6=log, 7=trace.
 
----
+### HTTP Agent API Diagnostics
 
-## 4. Operational Health & Readiness Criteria
+While the API server runs (default port 7357):
+- Access logs and errors print to standard error
+- Health check endpoint: `GET /status` verifies server responsiveness
+- Project API: `GET /project` validates document structure
 
-| Interface / Surface | Health Signal | Verification Method |
-| :--- | :--- | :--- |
-| **Flatpak Launch** | GTK application construct & window initialization | `flatpak run org.tunaos.dualcut --gapplication-service` |
-| **GStreamer Pipeline** | GES element availability & encoder plugins | `gst-inspect-1.0 ges` |
-| **HTTP Agent API** | Local HTTP server response | `curl -f http://localhost:8080/status` (when agent API is active) |
-| **Project Schema** | JSON project structure validation | `python3 -m json.tool project.json` |
+## Operational Health Verification
 
----
+| Component | Health Signal | Verification |
+|-----------|---------------|---------------|
+| **Flatpak Launch** | GTK window initialization | `flatpak run org.tunaos.dualcut --version` |
+| **GStreamer Pipeline** | GES element availability | `gst-inspect-1.0 ges` |
+| **Rendering** | Encoder plugins (H.264, VP8) | `gst-inspect-1.0 -k h264` `gst-inspect-1.0 -k vp8` |
+| **HTTP API** | Local server response | `curl http://localhost:7357/status` (while serving) |
+| **Project Validation** | JSON schema compliance | `python3 -c "import json; json.load(open('project.json'))"` |
 
-## 5. Operations Recommendations
+## Operations Troubleshooting
 
-1. **Local Diagnostic Triage**: Use `GST_DEBUG` and `G_MESSAGES_DEBUG` flags during timeline playback or render pipeline investigation.
-2. **Deprecation Guidance**: Critical security and crash bugfixes are maintained in Dualcut; new feature requests should be evaluated against `shrimply`.
+### GStreamer Pipeline Issues
+
+Use environment variable debugging to isolate media encoding/decoding problems:
+
+```bash
+# Enable all GStreamer debugging
+GST_DEBUG=*:5 flatpak run org.tunaos.dualcut 2>&1 | grep -i error
+
+# Check specific element availability
+gst-inspect-1.0 | grep -E 'h264|vp8|aac|vorbis'
+```
+
+### Proxy Media Cache
+
+Proxy media is cached in `.dualcut-cache/` within the project directory:
+- Safe to delete; will be regenerated on next preview
+- Reduces timeline scrubbing latency for large videos
+- Disable with *Preferences → Use proxy media*
+
+### Deprecation Guidance
+
+Critical security and crash fixes are maintained in Dualcut. For new features, evaluate against [shrimply](https://github.com/soirihiroka/shrimply) — the active development project.
