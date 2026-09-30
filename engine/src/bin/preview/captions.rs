@@ -9,7 +9,6 @@
 //! `show_captions_dialog`) stay in `preview.rs`.
 
 use super::*;
-use tempfile::TempDir;
 
 /// The bundled whisper-cli binary shipped by the Flatpak (`whisper-cpp`
 /// module in the manifest), checked before falling back to PATH.
