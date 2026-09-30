@@ -9,6 +9,7 @@
 //! `show_captions_dialog`) stay in `preview.rs`.
 
 use super::*;
+use tempfile::TempDir;
 
 /// The bundled whisper-cli binary shipped by the Flatpak (`whisper-cpp`
 /// module in the manifest), checked before falling back to PATH.
@@ -89,8 +90,11 @@ pub(crate) fn run_captions_job(
     model: String,
     word_level: bool,
 ) -> std::result::Result<Vec<(f64, f64, String)>, String> {
-    let tmp = std::env::temp_dir().join(format!("dualcut-captions-{}", std::process::id()));
-    std::fs::create_dir_all(&tmp).map_err(|e| format!("temp dir: {e}"))?;
+    let tmp = tempfile::Builder::new()
+        .prefix("dualcut-captions-")
+        .tempdir()
+        .map_err(|e| format!("temp dir: {e}"))?
+        .into_path();
     let wav = tmp.join("voice.wav");
     dualcut_engine::render_project(&project_json, &base_dir, &wav.to_string_lossy(), "wav")
         .map_err(|e| format!("audio export failed: {e:#}"))?;
