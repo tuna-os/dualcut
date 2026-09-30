@@ -90,11 +90,11 @@ pub(crate) fn run_captions_job(
     model: String,
     word_level: bool,
 ) -> std::result::Result<Vec<(f64, f64, String)>, String> {
-    let tmp = tempfile::Builder::new()
+    let tmp_dir = tempfile::Builder::new()
         .prefix("dualcut-captions-")
         .tempdir()
-        .map_err(|e| format!("temp dir: {e}"))?
-        .into_path();
+        .map_err(|e| format!("temp dir: {e}"))?;
+    let tmp = tmp_dir.path();
     let wav = tmp.join("voice.wav");
     dualcut_engine::render_project(&project_json, &base_dir, &wav.to_string_lossy(), "wav")
         .map_err(|e| format!("audio export failed: {e:#}"))?;
