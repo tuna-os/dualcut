@@ -22,12 +22,13 @@ fi
 # Work on a disposable copy of the demo project so commits are harmless.
 WORK=$(mktemp -d)
 cp -r "$ROOT/engine/examples/." "$WORK/"
+trap 'rm -rf "$WORK"' EXIT
 
 capture() { # capture <name>
   sleep 0.4
-  DISPLAY=$DISPLAY_NUM xwd -root -silent > /tmp/wt-frame.xwd || true
-  [ -s /tmp/wt-frame.xwd ] || { echo "empty frame for $1" >&2; return 0; }
-  python3 - "$OUT/$1.png" /tmp/wt-frame.xwd << 'EOF'
+  DISPLAY=$DISPLAY_NUM xwd -root -silent > "$WORK/wt-frame.xwd" || true
+  [ -s "$WORK/wt-frame.xwd" ] || { echo "empty frame for $1" >&2; return 0; }
+  python3 - "$OUT/$1.png" "$WORK/wt-frame.xwd" << 'EOF'
 import struct, sys
 d = open(sys.argv[2], "rb").read()
 hdr = struct.unpack(">25I", d[:100])
