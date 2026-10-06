@@ -8,7 +8,253 @@ The Rust engine in `engine/` uses document model v2 — **scenes** (sequential
 narrative spine) + **overlays** (tracks crossing scene cuts) + **defs**
 (reusable parameterised compositions). Full types: `engine/src/document.rs`.
 
-## HTTP ops (POST /op)
+## HTTP API Reference
+
+All endpoints run on `127.0.0.1:7357` by default (set `DUALCUT_API_PORT` to override, or `0` to disable). Port binding occurs when the app or `cargo run --bin serve` launches with a project.
+
+### GET /project
+
+Retrieve the current project document.
+
+**Response (200 OK):**
+```json
+{
+  "meta": { "title": "...", "width": 1920, "height": 1080, "fps": 30 },
+  "defs": { /* ... */ },
+  "scenes": [ /* ... */ ],
+  "overlays": [ /* ... */ ]
+}
+```
+
+**Errors:**
+- `500 Internal Server Error` — project file unreadable or invalid JSON
+
+### POST /project
+
+Replace the entire project document. The new document is validated against the schema before being written.
+
+**Request body:** Complete project document (JSON)
+
+**Response (200 OK):**
+```json
+{ "ok": true }
+```
+
+**Errors:**
+- `400 Bad Request` — invalid JSON or schema validation failed; error describes the issue
+- `500 Internal Server Error` — file write failed
+
+### POST /op
+
+Execute a structural editing operation with nontrivial math, so you don't reimplement offset/animation splitting. All operations return the updated project, validated and saved to disk.
+
+#### split
+
+Split a clip at an absolute time, advancing media offsets and dividing animations.
+
+**Request:**
+```json
+{ "op": "split", "id": "clip-id", "at": 5.0 }
+```
+
+- `id` (string) — clip ID to split
+- `at` (number) — absolute time in seconds
+
+**Response (200 OK):**
+```json
+{ "ok": true, "new_id": "clip-id-1" }
+```
+
+The second (new) clip receives the generated ID.
+
+**Errors:**
+- `400 Bad Request` — clip not found, invalid `at` value, or clip cannot be split
+
+#### ripple_delete
+
+Delete a clip and close the gap (shift later clips backward).
+
+**Request:**
+```json
+{ "op": "ripple_delete", "id": "clip-id" }
+```
+
+**Response (200 OK):**
+```json
+{ "ok": true }
+```
+
+**Errors:**
+- `400 Bad Request` — clip not found or operation failed
+
+#### detach_audio
+
+For a video clip, set its `volume: 0` and create a matching audio clip elsewhere. The audio clip receives a generated ID.
+
+**Request:**
+```json
+{ "op": "detach_audio", "id": "video-clip-id" }
+```
+
+**Response (200 OK):**
+```json
+{ "ok": true, "new_id": "audio-clip-id" }
+```
+
+**Errors:**
+- `400 Bad Request` — clip not found or is not a video clip
+
+#### move_to_lane
+
+Move a clip to a different overlay track at a new time.
+
+**Request:**
+```json
+{ "op": "move_to_lane", "id": "clip-id", "lane": 1, "at": 3.5 }
+```
+
+- `id` (string) — clip ID
+- `lane` (integer) — overlay track index (0-based); creates the track if needed
+- `at` (number) — absolute time in seconds
+
+**Response (200 OK):**
+```json
+{ "ok": true }
+```
+
+**Errors:**
+- `400 Bad Request` — clip not found or invalid parameters
+
+#### remove_silence
+
+**Requires:** `preview` feature (e.g., `cargo build --features preview`). Disabled when serving headless on a build without this feature; requests will return 400 with error message.
+
+Detect and remove silent stretches from a video or audio clip's media.
+
+**Request:**
+```json
+{
+  "op": "remove_silence",
+  "id": "clip-id",
+  "threshold_db": -40.0,
+  "min_duration": 0.5
+}
+```
+
+- `id` (string) — clip ID (must have `src` for video/audio)
+- `threshold_db` (number, optional) — silence threshold in dBFS; default `-40.0`
+- `min_duration` (number, optional) — minimum silent duration to remove in seconds; default `0.5`
+
+**Response (200 OK):**
+```json
+{ "ok": true, "removed": 3.5 }
+```
+
+The `removed` value is the total duration (seconds) of silence that was excised.
+
+**Errors:**
+- `400 Bad Request` — clip not found, has no media, or feature not compiled in
+- `500 Internal Server Error` — media file unreadable or GStreamer pipeline failed
+
+### POST /script
+
+**Requires:** `scripting` feature. Run a TypeScript transformation function against the project.
+
+**Request body:** TypeScript source code
+
+```typescript
+export function edit(project: Project): Project {
+  // Modify project in-place or return a new one
+  project.scenes[0].duration = 5.0;
+  return project;
+}
+```
+
+**Response (200 OK):**
+```json
+{ "ok": true }
+```
+
+The returned project is validated and saved to disk.
+
+**Errors:**
+- `400 Bad Request` — syntax error, type error, or runtime error in the script; error message describes the issue
+- `500 Internal Server Error` — file write failed
+
+### POST /render
+
+**Requires:** `preview` feature. Render the project to a video file.
+
+**Request:**
+```json
+{
+  "out": "/path/to/output.mp4",
+  "profile": "mp4"
+}
+```
+
+- `out` (string) — output file path; `.mp4` or `.webm` extension determines codec if `profile` not given
+- `profile` (string, optional) — output profile: `mp4` (H.264/AAC) or `webm` (VP8/Vorbis); auto-detected from extension if omitted
+
+**Response (200 OK):**
+```json
+{ "ok": true, "duration": 120.5, "warnings": [ "Clip 'c3' has no source" ] }
+```
+
+**Errors:**
+- `400 Bad Request` — invalid output path or unsupported profile
+- `500 Internal Server Error` — encoder pipeline failed or write permission denied
+
+### GET /status
+
+Health check and operational info.
+
+**Response (200 OK):**
+```json
+{
+  "engine": "dualcut",
+  "version": "0.20.0",
+  "project": "My Project",
+  "duration": 42.5,
+  "scenes": 5
+}
+```
+
+**Errors:**
+- `500 Internal Server Error` — project file unreadable
+
+### HTTP Status Codes
+
+- **200 OK** — operation succeeded
+- **400 Bad Request** — invalid request format, missing required parameters, validation failed, or feature not compiled in
+- **404 Not Found** — endpoint does not exist
+- **500 Internal Server Error** — server error (file I/O, encoder failure, unhandled exception)
+
+### Error Response Format
+
+All error responses are JSON:
+
+```json
+{ "error": "descriptive message" }
+```
+
+For validation errors on POST /project or POST /script, the message describes which field or rule was violated.
+
+### Common Patterns
+
+**Read-modify-write cycle:** Always GET first before POSTing an update:
+
+```sh
+curl localhost:7357/project > project.json
+# Edit project.json locally
+curl -X POST --data-binary @project.json localhost:7357/project
+```
+
+**Scripted bulk edits:** Use POST /script for operations that read and write the document in one shot (rename scenes, retiming clips, generating layers from data).
+
+**Headless rendering:** Use POST /render or the CLI `cargo run --bin render` to export video from a script or CI pipeline without opening the UI.
+
+## HTTP ops detail
 
 Ops with nontrivial math, so you don't reimplement them:
 `{"op": "split", "id": "clip", "at": 5.0}` → splits at absolute time
@@ -22,9 +268,11 @@ Recipes: docs/recipes/ (auto-captions).
 
 1. **File**: edit the project JSON (e.g. `engine/examples/demo-project.json`).
 2. **HTTP** (while `cargo run --bin serve -- <project.json> [port]` runs,
-   default port 7357):
+   default port 7357; see **HTTP API Reference** below for full endpoint docs):
    - `GET  /project` — current document
    - `POST /project` — replace document (validated, saved to disk)
+   - `POST /op` — structural edits: split, ripple_delete, detach_audio, move_to_lane, remove_silence
+   - `POST /script` — run TypeScript transformation
    - `POST /render` — `{"out": "path.mp4"}` renders and reports warnings
    - `GET  /status` — engine info
 3. **CLI render**: `cargo run --bin render -- <project.json> <out.mp4>`
