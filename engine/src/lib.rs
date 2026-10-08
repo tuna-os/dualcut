@@ -25,6 +25,7 @@ pub mod scripting;
 pub mod vector;
 #[cfg(feature = "vector")]
 pub mod vellosrc;
+pub mod schema;
 
 pub fn init() -> Result<()> {
     gst::init().context("initializing GStreamer")?;
