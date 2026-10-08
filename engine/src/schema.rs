@@ -1,11 +1,11 @@
-/// Document schema types and validation.
-///
-/// This module contains the versioned, immutable document data model that
-/// describes the structure of a video composition (tracks, clips, effects,
-/// timeline). These types are independent of persistence format and UI state,
-/// making them independently versionable and testable.
-///
-/// See dualcut#196 for the extraction roadmap.
+//! Document schema types and validation.
+//!
+//! This module contains the versioned, immutable document data model that
+//! describes the structure of a video composition (tracks, clips, effects,
+//! timeline). These types are independent of persistence format and UI state,
+//! making them independently versionable and testable.
+//!
+//! See dualcut#196 for the extraction roadmap.
 
 use serde::{Deserialize, Serialize};
 
