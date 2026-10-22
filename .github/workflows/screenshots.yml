@@ -73,10 +73,6 @@ jobs:
             xwd
           git config --global --add safe.directory "$(pwd)"
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: engine
-
       # Clear the committed images BEFORE the build, not after. If the build
       # fails, the capture step is skipped and an unconditional upload would
       # publish the previous run's committed PNGs as though they were this

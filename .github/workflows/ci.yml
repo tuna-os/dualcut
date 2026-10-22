@@ -46,10 +46,6 @@ jobs:
             mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
           git config --global --add safe.directory "$(pwd)"
 
-      - uses: Swatinem/rust-cache@v2
-        with:
-          workspaces: engine
-
       - name: Clippy (warnings are errors)
         working-directory: engine
         run: cargo clippy --all-features -- -D warnings
