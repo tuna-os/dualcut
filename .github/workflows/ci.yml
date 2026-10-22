@@ -37,7 +37,7 @@ jobs:
 
       - name: Install toolchain + runtime
         run: |
-          dnf install -y -q cargo rust clippy clang-devel pkgconf-pkg-config \
+          dnf install -y -q curl gcc clang-devel pkgconf-pkg-config \
             gtk4-devel libadwaita-devel gstreamer1-devel \
             gstreamer1-plugins-base-devel gst-editing-services-devel \
             gstreamer1-plugins-good gstreamer1-plugins-bad-free \
@@ -45,6 +45,14 @@ jobs:
             gstreamer1-plugin-libav \
             mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
           git config --global --add safe.directory "$(pwd)"
+
+      - name: Install pinned coverage-capable Rust toolchain
+        uses: dtolnay/rust-toolchain@1.94.0
+        with:
+          components: clippy, llvm-tools-preview
+
+      - name: Install pinned coverage tool
+        run: cargo install cargo-llvm-cov --version 0.6.21 --locked
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -54,9 +62,30 @@ jobs:
         working-directory: engine
         run: cargo clippy --all-features -- -D warnings
 
-      - name: Unit tests
-        working-directory: engine
-        run: cargo test --all-features
+      - name: Unit tests with coverage
+        run: bash scripts/coverage.sh
+
+      - name: Publish coverage summary
+        if: ${{ !cancelled() }}
+        run: |
+          if [ -f coverage/summary.txt ]; then
+            {
+              echo '## Rust unit-test coverage (all features)'
+              echo 'Render and UI smoke tests are not included.'
+              echo '```text'
+              cat coverage/summary.txt
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: Preserve coverage reports and raw profiles
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: rust-coverage-${{ github.sha }}
+          path: coverage/
+          if-no-files-found: error
+          retention-days: 14
 
       - name: Build release render binary
         working-directory: engine

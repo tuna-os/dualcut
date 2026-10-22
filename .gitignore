@@ -24,3 +24,6 @@ dist-ssr
 *.sw?
 .dualcut-cache/
 .claude/worktrees/
+
+# Local coverage reports and raw profiles
+/coverage/

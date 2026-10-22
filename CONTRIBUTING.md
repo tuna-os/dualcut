@@ -96,6 +96,33 @@ package list and validation commands.
 
 4. **Open a PR** describing what changed and why; link any related issue.
 
+### Reproducing coverage
+
+Install the system dependencies above, then use the same pinned tools as CI:
+
+```sh
+rustup toolchain install 1.94.0 --component clippy --component llvm-tools-preview
+cargo +1.94.0 install cargo-llvm-cov --version 0.6.21 --locked
+RUSTUP_TOOLCHAIN=1.94.0 bash scripts/coverage.sh
+```
+
+The script cleans previous instrumentation, tests the current revision with
+`--locked --all-features`, and writes `coverage/lcov.info` (machine-readable),
+`coverage/summary.txt` (per-file and total coverage), `coverage/metadata.txt`
+(revision and tool versions), and `coverage/raw-profiles.tar.gz` (LLVM raw and
+merged profiles). CI publishes the text summary on the run summary page and
+retains these files for 14 days in the `rust-coverage-<commit SHA>` artifact
+under **Actions → CI → run → Artifacts**. No upload token or external coverage
+service is required; `codecov.yml` does not impose a coverage gate here.
+
+This measures Rust unit/integration tests only. Stable Rust does not instrument
+doctests, and the separately built render/UI smoke tests are not included.
+Raw LLVM profiles require matching instrumented binaries and LLVM tools for
+further analysis; they are diagnostic data, not a portable standalone report.
+Use LCOV for portable consumption. Test failures still fail CI, while available
+reports and profiles are retained for diagnosis. Reproduction requires the same
+system dependencies as CI; native GStreamer/GES code is outside this report.
+
 ### If you change the schema
 
 `engine/schema/dualcut.d.ts` and `engine/schema/dualcut.schema.json` are the
