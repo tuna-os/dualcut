@@ -53,23 +53,201 @@ Read these — they are short and will save you (and reviewers) time:
 
 ## Setting up a dev environment
 
-You need the **canonical dependency list** from
-[`engine/build-aux/org.tunaos.dualcut.json`](engine/build-aux/org.tunaos.dualcut.json)
-— that Flatpak manifest is the source of truth for GStreamer (+ GES), GTK4,
-libadwaita, and friends. A Fedora-style environment works well:
+The [Flatpak manifest](engine/build-aux/org.tunaos.dualcut.json) is the
+canonical dependency list for the shipped app. Native package names differ
+by platform; [`engine/Cargo.toml`](engine/Cargo.toml) defines the enabled
+Rust features and native version requirements. In particular, `preview`
+currently requires **libadwaita >= 1.8**. The headless `render` and `serve`
+binaries do not require GTK/libadwaita.
+
+### Rust (all native platforms)
+
+Install stable Rust using [rustup](https://rustup.rs/), then run:
 
 ```sh
-sudo dnf install -y cargo rust clippy gtk4-devel libadwaita-devel \
-  gstreamer1-devel gstreamer1-plugins-base-devel gst-editing-services-devel \
+rustup update stable
+rustup default stable
+rustup component add clippy rustfmt
+rustc --version
+cargo --version
+```
+
+Use a current stable compiler: the engine uses Rust edition 2024 and its
+locked dependencies may need a newer compiler than the edition minimum.
+Run commands below from the repository root unless stated otherwise.
+
+### Fedora (CI environment)
+
+```sh
+sudo dnf install -y cargo rust clippy clang-devel pkgconf-pkg-config \
+  gtk4-devel libadwaita-devel gstreamer1-devel \
+  gstreamer1-plugins-base-devel gst-editing-services-devel \
   gstreamer1-plugins-good gstreamer1-plugins-bad-free \
   gstreamer1-plugins-base-tools gstreamer1-plugins-good-extras \
   gstreamer1-plugin-libav mesa-vulkan-drivers python3-pillow \
   xorg-x11-server-Xvfb xset xz
 ```
 
-CI runs inside a Fedora 45 container. See
-[`.github/workflows/ci.yml`](.github/workflows/ci.yml) for the authoritative
-package list and validation commands.
+CI uses Fedora 45; [ci.yml](.github/workflows/ci.yml) is authoritative for
+its package list and checks. Fedora packages supply Rust in this workflow;
+use either those packages or rustup consistently.
+
+### Ubuntu / Debian
+
+```sh
+sudo apt update
+sudo apt install -y build-essential git curl pkg-config clang libclang-dev \
+  cmake ninja-build xz-utils libgtk-4-dev libadwaita-1-dev \
+  libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev libges-1.0-dev \
+  gstreamer1.0-tools gstreamer1.0-plugins-base gstreamer1.0-plugins-good \
+  gstreamer1.0-plugins-bad gstreamer1.0-plugins-ugly gstreamer1.0-libav \
+  mesa-vulkan-drivers python3-pil xvfb x11-xserver-utils
+```
+
+On Ubuntu, enable the `universe` repository if packages such as
+[`libges-1.0-dev`](https://packages.ubuntu.com/search?keywords=libges-1.0-dev)
+are unavailable. Install Rust as described above rather than relying on an
+older distribution compiler. Check the UI prerequisite before building:
+
+```sh
+pkg-config --modversion gtk4 libadwaita-1
+pkg-config --atleast-version=1.8 libadwaita-1
+```
+
+Ubuntu 24.04 and Debian 12 ship libadwaita older than 1.8. Their native
+packages can support headless development, but cannot build `preview` as
+configured. Use a newer distribution with compatible packages, the Fedora
+container below, or the GNOME SDK from the Flatpak manifest for UI work.
+Do not lower the Cargo feature requirement to silence a version error.
+
+### macOS (Intel and Apple Silicon, Homebrew)
+
+Install the Xcode command-line tools (`xcode-select --install`) and
+[Homebrew](https://brew.sh/), including its printed `brew shellenv` setup.
+Then install native dependencies and Rust as above:
+
+```sh
+brew install pkgconf gstreamer gtk4 libadwaita cmake ninja llvm
+export PKG_CONFIG_PATH="$(brew --prefix)/lib/pkgconfig:$(brew --prefix)/share/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+export LIBCLANG_PATH="$(brew --prefix llvm)/lib"
+pkg-config --modversion gstreamer-1.0 gst-editing-services-1.0 gtk4 libadwaita-1
+pkg-config --atleast-version=1.8 libadwaita-1
+```
+
+The current [Homebrew GStreamer formula](https://formulae.brew.sh/formula/gstreamer)
+bundles GES and the plugin sets; separate `gst-*` formulae are no longer
+needed. `brew --prefix` handles `/opt/homebrew` on Apple Silicon and
+`/usr/local` on Intel. Keep the terminal, Rust target, and Homebrew packages
+on the same architecture (`uname -m`; `rustc -vV`). On Apple Silicon, avoid
+mixing Rosetta Intel libraries with an ARM Rust compiler. Do not combine
+Homebrew libraries with a separate GStreamer framework or MacPorts tree.
+
+macOS is a native development path, not a CI-tested release target. Start
+with the headless build below. GTK uses its macOS backend; Linux Xvfb,
+Wayland, and Vulkan-driver package instructions do not apply. GPU preview
+and scripting may expose platform-specific issues; report the failing
+feature and tool/library versions when filing a bug.
+
+### NixOS / Nix development shell
+
+For a Linux shell without changing system packages, save this as a local
+`shell.nix` (the repository does not maintain a pinned flake):
+
+```nix
+{ pkgs ? import <nixpkgs> {} }:
+pkgs.mkShell {
+  nativeBuildInputs = with pkgs; [
+    cargo rustc clippy rustfmt pkg-config clang cmake ninja
+  ];
+  buildInputs = with pkgs; [
+    gtk4 libadwaita libclang vulkan-loader mesa
+    gst_all_1.gstreamer gst_all_1.gst-editing-services
+    gst_all_1.gst-plugins-base gst_all_1.gst-plugins-good
+    gst_all_1.gst-plugins-bad gst_all_1.gst-plugins-ugly
+    gst_all_1.gst-libav
+  ];
+  LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+}
+```
+
+Enter with `nix-shell`, then run the verification below. Use a nixpkgs
+revision providing libadwaita >= 1.8 and a current Rust compiler. For
+reproducibility, pin that revision with your Nix tooling and retain the
+lock/pin alongside your local shell; `<nixpkgs>` alone follows your channel
+and is not reproducible. See the [NixOS GStreamer guide](https://wiki.nixos.org/wiki/GStreamer)
+for plugin discovery in shells. On non-NixOS Linux, GPU work may additionally
+need host-driver integration; use headless tests first.
+
+### Isolated Linux environment (Podman or Docker)
+
+From the repository root, enter the same Fedora release used by CI:
+
+```sh
+podman run --rm -it --userns=keep-id \
+  -v "$PWD:/work:Z" -w /work quay.io/fedora/fedora:45 bash
+```
+
+For Docker, replace `podman` with `docker` and omit `--userns=keep-id`;
+files created by Docker's root user may need their ownership restored on
+the host. Inside the container, run the Fedora installation command above
+as root (omit `sudo`), then the verification and checks below. Source and
+`engine/target` persist in the mounted checkout; installed packages disappear
+on exit. This is a disposable development shell, not a pinned image.
+
+This command supports headless builds/tests. It does not forward a desktop
+session or GPU. For the UI smoke test use CI's Xvfb recipe; for interactive
+UI work use a native Linux desktop or a separately configured display/GPU
+container. On macOS, Podman/Docker require their Linux VM.
+
+### Verify the environment and build
+
+```sh
+pkg-config --modversion gstreamer-1.0 gst-editing-services-1.0
+gst-inspect-1.0 --version
+gst-inspect-1.0 nlecomposition
+gst-inspect-1.0 textoverlay
+gst-inspect-1.0 x264enc
+gst-inspect-1.0 avenc_aac
+cd engine
+cargo build --locked --bin render --bin serve
+# Render the built-in demo (no external media needed):
+cargo run --locked --bin render -- /tmp/dualcut-check.mp4
+# Optional UI (requires libadwaita >= 1.8 and a desktop session):
+cargo run --locked --features preview,vector,scripting --bin preview -- examples/demo-project.json
+```
+
+GES is a library: verify its development files with `pkg-config` and its
+NLE runtime elements with `gst-inspect-1.0 nlecomposition`, rather than
+assuming a plugin named `ges` exists. Remove `/tmp/dualcut-check.mp4`
+after checking the rendered video. Run the full CI checks in the
+next section before submitting changes.
+
+### Troubleshooting
+
+- **Missing `.pc` file / GTK version error:** install development packages,
+  not only runtime libraries. Inspect `pkg-config --modversion` for the
+  library named in the error. `PKG_CONFIG_PATH` must point at the same
+  package manager and architecture as your compiler. A version below 1.8
+  for libadwaita requires a newer environment for `preview`.
+- **Missing GStreamer element / codec:** inspect the named element directly
+  with `gst-inspect-1.0`. MP4 export needs `x264enc` and `avenc_aac`; install
+  the ugly and libav plugin sets (bundled by Homebrew). Use
+  `GST_DEBUG=2` on the failing command for discovery errors. Check for stale
+  `GST_PLUGIN_PATH` / `GST_PLUGIN_SYSTEM_PATH` overrides pointing at another
+  installation before changing them; `pkg-config` success alone does not
+  prove runtime plugins are present.
+- **Rust edition or MSRV error:** update stable Rust and check `which cargo`
+  and `rustc -vV` for an older distribution compiler shadowing rustup.
+  Keep `Cargo.lock`; deleting it changes the dependency set.
+- **libclang or scripting build failure:** check the clang development
+  package / `LIBCLANG_PATH`. The `scripting` feature uses rusty_v8 and may
+  download a target-specific archive; a proxy or unsupported target can
+  fail independently of GTK. Try the headless build without optional
+  features to isolate it.
+- **No display / GPU adapter:** `serve` and basic rendering work without a
+  desktop. `preview` needs a graphical session; vector rendering needs a
+  working GPU backend (or a compatible software driver). Use the CI Xvfb
+  recipe for Linux UI smoke tests rather than forcing a Wayland session.
 
 ## Making a change
 
