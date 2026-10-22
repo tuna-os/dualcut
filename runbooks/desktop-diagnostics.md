@@ -75,17 +75,28 @@ GST_DEBUG=3,ges:5 flatpak run org.tunaos.dualcut
 ## Failure Mode 2: HTTP Agent API Connection Refused / Timeout
 
 * **Symptom**: External scripts or HTTP clients fail to communicate with Dualcut (`Connection refused`).
-* **Root Cause**: Embedded API server disabled, port collision on `8080`, or local firewall rules.
+* **Root Cause**: Embedded API server disabled, port collision on `7357`, or local firewall rules.
 * **Diagnostic Steps**:
   1. Check if the port is bound:
      ```bash
-     ss -tuln | grep 8080
+     ss -tln 'sport = :7357'
      ```
   2. Test health endpoint:
      ```bash
-     curl -i http://127.0.0.1:8080/status
+     curl -i http://127.0.0.1:7357/status
      ```
-* **Remediation**: Reconfigure API server port in preferences or launch with `--api-port=<PORT>`.
+* **Remediation**:
+  - Launch the preview app with a project JSON file; its embedded API starts only when a project path is present. The default listener is `127.0.0.1:7357`.
+  - Set `DUALCUT_API_PORT=<PORT>` to override the preview app's port. `DUALCUT_API_PORT=0` disables its API. For example, launch the Flatpak with an explicit port and project path:
+    ```bash
+    flatpak run --env=DUALCUT_API_PORT=7357 org.tunaos.dualcut /absolute/path/to/project.json
+    ```
+  - For the standalone server, run from `engine/`:
+    ```bash
+    cargo run --bin serve -- <project.json> [port]
+    ```
+    It defaults to `127.0.0.1:7357`; the optional positional `[port]` overrides that port. `DUALCUT_API_PORT` controls the preview app, not this standalone server.
+  - If you choose another port, use it in both diagnostic commands above.
 
 ---
 
