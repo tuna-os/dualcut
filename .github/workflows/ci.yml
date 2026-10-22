@@ -35,9 +35,9 @@ jobs:
             exit 1
           }
 
-      - name: Install toolchain + runtime
+      - name: Install build dependencies + runtime
         run: |
-          dnf install -y -q cargo rust clippy clang-devel pkgconf-pkg-config \
+          dnf install -y -q curl ca-certificates gcc clang-devel pkgconf-pkg-config \
             gtk4-devel libadwaita-devel gstreamer1-devel \
             gstreamer1-plugins-base-devel gst-editing-services-devel \
             gstreamer1-plugins-good gstreamer1-plugins-bad-free \
@@ -45,6 +45,19 @@ jobs:
             gstreamer1-plugin-libav \
             mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
           git config --global --add safe.directory "$(pwd)"
+
+      # Fedora's standalone cargo/rust packages do not provide rustup.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Verify Rust toolchain before caching
+        run: |
+          rustup toolchain list
+          cargo --version
+          rustc --version
+          cargo clippy --version
 
       - uses: Swatinem/rust-cache@v2
         with:

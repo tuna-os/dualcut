@@ -61,9 +61,9 @@ jobs:
       # megapackage into per-utility packages, and xorg-x11-apps no longer
       # exists (checked against Fedora's package index for f44 and rawhide,
       # which have xwd 1.0.9 and 1.0.10 and no xorg-x11-apps at all).
-      - name: Install toolchain + runtime
+      - name: Install build dependencies + runtime
         run: |
-          dnf install -y -q cargo rust clang-devel pkgconf-pkg-config \
+          dnf install -y -q curl ca-certificates gcc clang-devel pkgconf-pkg-config \
             gtk4-devel libadwaita-devel gstreamer1-devel \
             gstreamer1-plugins-base-devel gst-editing-services-devel \
             gstreamer1-plugins-good gstreamer1-plugins-bad-free \
@@ -72,6 +72,19 @@ jobs:
             mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz \
             xwd
           git config --global --add safe.directory "$(pwd)"
+
+      # Fedora's standalone cargo/rust packages do not provide rustup.
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - name: Verify Rust toolchain before caching
+        run: |
+          rustup toolchain list
+          cargo --version
+          rustc --version
+          cargo clippy --version
 
       - uses: Swatinem/rust-cache@v2
         with:

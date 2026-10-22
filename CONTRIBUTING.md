@@ -69,7 +69,9 @@ sudo dnf install -y cargo rust clippy gtk4-devel libadwaita-devel \
 
 CI runs inside a Fedora 45 container. See
 [`.github/workflows/ci.yml`](.github/workflows/ci.yml) for the authoritative
-package list and validation commands.
+package list and validation commands. CI installs stable Rust and Clippy via
+`dtolnay/rust-toolchain` before restoring the Rust cache; Fedora packages
+provide the native build and runtime dependencies.
 
 ## Making a change
 
