@@ -28,6 +28,9 @@ on:
       - ".github/workflows/screenshots.yml"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 concurrency:
   group: screenshots-${{ github.ref }}
   cancel-in-progress: true
