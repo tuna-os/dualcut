@@ -74,8 +74,25 @@ jobs:
 
       - name: App start smoke (headless)
         run: |
-          Xvfb :95 -screen 0 1280x800x24 &
-          sleep 2
+          Xvfb :95 -screen 0 1280x800x24 > /tmp/xvfb.log 2>&1 &
+          xvfb_pid=$!
+          cleanup() {
+            kill "$xvfb_pid" 2>/dev/null || true
+            wait "$xvfb_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          # Wait for a working X connection, including on slow runners.
+          # Bound the whole probe so a stalled xset cannot hang the job.
+          if ! DISPLAY=:95 timeout 30 sh -c '
+            until xset q >/dev/null 2>&1; do
+              kill -0 "$1" 2>/dev/null || exit 1
+              sleep 0.2
+            done
+          ' sh "$xvfb_pid"; then
+            echo "Xvfb failed to become ready within 30 seconds"
+            cat /tmp/xvfb.log
+            exit 1
+          fi
           set +e
           GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=:95 \
             DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
