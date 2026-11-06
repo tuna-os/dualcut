@@ -11,6 +11,7 @@ use gstreamer as gst;
 use gstreamer_pbutils as gst_pbutils;
 use gstreamer_editing_services as ges;
 
+pub mod schema;
 pub mod document;
 pub mod api;
 pub mod media;
