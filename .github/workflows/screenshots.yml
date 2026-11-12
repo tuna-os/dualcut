@@ -48,7 +48,7 @@ jobs:
       - name: Install git first
         run: dnf install -y -q git
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
         with:
           persist-credentials: false
 
@@ -78,7 +78,7 @@ jobs:
             xwd
           git config --global --add safe.directory "$(pwd)"
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: engine
 
@@ -160,7 +160,7 @@ jobs:
           done
           [ "$fail" -eq 0 ]
 
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: guide-screenshots
@@ -176,14 +176,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1 # zizmor: ignore[artipacked] later step pushes screenshots to main
         with:
           ref: main
 
       - name: Drop committed images before restoring the capture
         run: rm -rf docs/guide
 
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+      - uses: actions/download-artifact@v8.0.2
         with:
           name: guide-screenshots
           path: docs/guide/

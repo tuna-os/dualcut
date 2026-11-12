@@ -28,4 +28,7 @@ jobs:
       generate-cargo-sources: true
       cargo-lock-path: engine/Cargo.lock
       cargo-sources-output: engine/build-aux/cargo-sources.json
-    secrets: inherit
+    # Pass only the secrets the called workflow declares and reads.
+    secrets:
+      FLATPAK_INDEX_DEPLOY_KEY: ${{ secrets.FLATPAK_INDEX_DEPLOY_KEY }}
+      FLATPAK_INDEX_TOKEN: ${{ secrets.FLATPAK_INDEX_TOKEN }}

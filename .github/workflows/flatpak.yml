@@ -9,8 +9,7 @@ on:
       - 'engine/**'
       - '.github/workflows/flatpak.yml'
 
-permissions:
-  contents: write
+permissions: {}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
@@ -19,6 +18,8 @@ concurrency:
 jobs:
   flatpak:
     name: Build Flatpak bundle (${{ matrix.arch }})
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -34,7 +35,9 @@ jobs:
       image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-50
       options: --privileged
     steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
 
       - name: Generate offline cargo sources
         run: |
@@ -45,7 +48,7 @@ jobs:
             -o engine/build-aux/cargo-sources.json
 
       - name: Build bundle
-        uses: flatpak/flatpak-github-actions/flatpak-builder@79327416609af08178ad73b352877e51450790b3 # v6.8
+        uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
         with:
           bundle: ${{ matrix.bundle }}
           manifest-path: engine/build-aux/org.tunaos.dualcut.json
@@ -54,7 +57,7 @@ jobs:
 
       - name: Attach bundle to release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
+        uses: softprops/action-gh-release@v3.0.4 # zizmor: ignore[superfluous-actions] gh release would change upload and release-note behaviour
         with:
           files: ${{ matrix.bundle }}
           # Only one matrix leg should (re)generate release notes, else
@@ -75,7 +78,7 @@ jobs:
       - name: Install git first
         run: dnf install -y -q git
 
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/checkout@v7.0.1 # zizmor: ignore[artipacked] later step pushes screenshots to main
         with:
           ref: main
 
@@ -90,7 +93,7 @@ jobs:
             python3-pillow xz
           git config --global --add safe.directory "$GITHUB_WORKSPACE"
 
-      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+      - uses: Swatinem/rust-cache@v2.9.3 # zizmor: ignore[cache-poisoning] lookup-only would drop the build cache, tag pushes only
         with:
           workspaces: engine
 
