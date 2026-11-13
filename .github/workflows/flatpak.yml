@@ -40,10 +40,17 @@ jobs:
           persist-credentials: false
 
       - name: Generate offline cargo sources
+        # Match the reviewed generator used by the shared publish workflow.
+        # When updating, review the upstream diff and update both pins together.
+        env:
+          GENERATOR_COMMIT: 41c20aa10819cdb2a4f3ca171758a96d1955c018
+          GENERATOR_SHA256: 0a2db6be87d75910facef28ab46d4d6460802e8419ab850d0caa6a364d26b380
         run: |
-          pip3 install --break-system-packages aiohttp toml || pip3 install aiohttp toml
+          set -eu
+          pip3 install --break-system-packages aiohttp tomlkit || pip3 install aiohttp tomlkit
           curl -fsSLo /tmp/flatpak-cargo-generator.py \
-            https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/master/cargo/flatpak-cargo-generator.py
+            "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/${GENERATOR_COMMIT}/cargo/flatpak-cargo-generator.py"
+          echo "${GENERATOR_SHA256}  /tmp/flatpak-cargo-generator.py" | sha256sum -c -
           python3 /tmp/flatpak-cargo-generator.py engine/Cargo.lock \
             -o engine/build-aux/cargo-sources.json
 
