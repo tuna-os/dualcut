@@ -38,10 +38,15 @@ The `preview` app serves `/op` but **not** `/render`; the `serve` bin serves
   `"'at' (seconds) required"`, `"clip is not a video clip"`.
 - Status codes: `200` success · `400` bad request (malformed/invalid body,
   unknown op, missing required param, clip not found, validation failed — the
-  file is left untouched) · `404` unknown route (`{"error":"not found"}`) ·
+  file is left untouched) · `403` request from a web page (see below) ·
+  `404` unknown route (`{"error":"not found"}`) ·
   `500` server error (project file unreadable on a read, or a write/render
   failed) · `501` feature not compiled in (`/script` on a `serve` bin built
   without `scripting`).
+- A request with an `Origin` header gets `403`. A request with a `Host` name
+  other than `localhost` also gets `403`; an IP address is accepted. Thus a web
+  page cannot use the API through the browser. curl, scripts and agents send
+  no `Origin`, and their `Host` is `localhost` or an IP address.
 - Writes (`/project`, `/op`, `/script`) validate then write; a validation error
   returns `400` and leaves the file unchanged. Each write drops a short-lived
   `.dualcut-cache/agent-edit.json` marker so the app's Edit History can tell an
