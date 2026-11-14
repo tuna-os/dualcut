@@ -59,6 +59,11 @@ jobs:
 
       - name: Measure coverage
         working-directory: engine
+        # No rustup in the Fedora container, so point cargo-llvm-cov at the
+        # distro llvm package instead of the llvm-tools-preview component.
+        env:
+          LLVM_COV: /usr/bin/llvm-cov
+          LLVM_PROFDATA: /usr/bin/llvm-profdata
         run: cargo llvm-cov test --all-features --lcov --output-path coverage.lcov
 
       - name: Upload coverage to Codecov
