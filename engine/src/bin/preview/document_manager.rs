@@ -4,6 +4,7 @@
 //! and project-level operations (open, save, commit edits).
 
 use super::*;
+use dualcut_engine::document::DocumentRepository;
 
 impl Editor {
     /// Persist the document, push a history entry, rebuild everything.
@@ -58,7 +59,7 @@ impl Editor {
 
     /// Open a project file, replacing the current session state.
     pub(crate) fn open_project(self: &Rc<Self>, path: &std::path::Path) {
-        match std::fs::read_to_string(path).map_err(anyhow::Error::from).and_then(|json| Project::from_json(&json)) {
+        match DocumentRepository::load(path) {
             Ok(project) => {
                 {
                     let mut st = self.state.borrow_mut();
@@ -107,7 +108,7 @@ impl Editor {
 
     pub(crate) fn write_and_rebuild(self: &Rc<Self>, path: &std::path::Path, project: Project) {
         self.state.borrow_mut().self_write = true;
-        if let Err(e) = std::fs::write(path, project.to_json()) {
+        if let Err(e) = DocumentRepository::save(path, &project) {
             eprintln!("saving project failed: {e}");
             return;
         }
