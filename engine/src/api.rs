@@ -33,6 +33,52 @@ fn touch_agent_marker(path: &Path, summary: &str) {
     let _ = std::fs::write(cache.join("agent-edit.json"), body);
 }
 
+/// Why a request must not reach a route, if it must not.
+///
+/// Binding to 127.0.0.1 keeps other machines out, not the user's own
+/// browser. A web page can send a request to a loopback port, and a POST
+/// with a text body needs no CORS preflight, so the write lands even
+/// though the page cannot read the answer. A page can read answers too
+/// once its hostname is re-pointed at 127.0.0.1 (DNS rebinding).
+///
+/// Browsers put `Origin` on every cross-site POST, and a rebound page's
+/// `Host` still names its own domain. curl, scripts and agents send
+/// neither. This API serves no pages, so there is no same-origin page to
+/// let through.
+pub fn cross_site_refusal(host: Option<&str>, origin: Option<&str>) -> Option<&'static str> {
+    if origin.is_some() {
+        return Some("requests from a web page (Origin header) are not accepted");
+    }
+    match host {
+        Some(host) if !is_localhost_or_ip(host) => Some("Host must be localhost or an IP address"),
+        _ => None,
+    }
+}
+
+/// `localhost` or an IP literal, with or without a port. An IP literal
+/// has no name to re-point, so it cannot be rebound; any other name can.
+fn is_localhost_or_ip(host: &str) -> bool {
+    if let Some(rest) = host.strip_prefix('[') {
+        return rest
+            .split_once(']')
+            .is_some_and(|(addr, _port)| addr.parse::<std::net::Ipv6Addr>().is_ok());
+    }
+    let name = host.rsplit_once(':').map_or(host, |(name, _port)| name);
+    name.eq_ignore_ascii_case("localhost") || name.parse::<std::net::Ipv4Addr>().is_ok()
+}
+
+/// The 403 for a request `cross_site_refusal` turns away, or `None` to
+/// carry on. Both servers call this before they read the body.
+pub fn refuse_cross_site(
+    request: &tiny_http::Request,
+) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
+    let header = |name: &'static str| {
+        request.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str())
+    };
+    cross_site_refusal(header("Host"), header("Origin"))
+        .map(|why| json_response(403, serde_json::json!({ "error": why }).to_string()))
+}
+
 /// Serve the agent API for `path` on 127.0.0.1:`port`, blocking forever.
 /// Spawn on a thread to run alongside a UI.
 pub fn serve_file_api(path: PathBuf, port: u16) -> Result<()> {
@@ -41,6 +87,10 @@ pub fn serve_file_api(path: PathBuf, port: u16) -> Result<()> {
     println!("agent API on http://127.0.0.1:{port} (project: {})", path.display());
 
     for mut request in server.incoming_requests() {
+        if let Some(refusal) = refuse_cross_site(&request) {
+            let _ = request.respond(refusal);
+            continue;
+        }
         let url = request.url().to_string();
         let method = request.method().clone();
         let mut body = String::new();
@@ -218,9 +268,21 @@ mod tests {
     /// Minimal hand-rolled HTTP/1.1 client -- no test-only dependency
     /// needed for requests this simple. Returns (status, body).
     fn http(port: u16, method: &str, path: &str, body: &str) -> (u16, String) {
+        http_with_headers(port, method, path, "Host: 127.0.0.1\r\n", body)
+    }
+
+    /// As `http`, with the caller's own header lines (each ending `\r\n`)
+    /// in place of the default `Host`.
+    fn http_with_headers(
+        port: u16,
+        method: &str,
+        path: &str,
+        headers: &str,
+        body: &str,
+    ) -> (u16, String) {
         let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
         let request = format!(
-            "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+            "{method} {path} HTTP/1.1\r\n{headers}Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
             body.len()
         );
         stream.write_all(request.as_bytes()).unwrap();
@@ -321,5 +383,74 @@ mod tests {
         let (status, body) = http(port, "GET", "/nope", "");
         assert_eq!(status, 404);
         assert!(body.contains("not found"));
+    }
+
+    /// What a web page can send without a preflight: a POST with a text
+    /// body. The browser adds `Origin`; the write must not land.
+    #[test]
+    fn post_from_a_web_page_is_refused_and_leaves_file_untouched() {
+        let port = 18399;
+        let path = spawn_server(port);
+        let before = std::fs::read_to_string(&path).unwrap();
+        let mut edited = test_project();
+        edited.meta.title = "from-a-web-page".into();
+        let headers = format!(
+            "Host: 127.0.0.1:{port}\r\nOrigin: https://example.com\r\nContent-Type: text/plain\r\n"
+        );
+        let (status, body) =
+            http_with_headers(port, "POST", "/project", &headers, &edited.to_json());
+        assert_eq!(status, 403, "response body: {body}");
+        assert!(body.contains("error"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+        let marker = path.parent().unwrap().join(".dualcut-cache").join("agent-edit.json");
+        assert!(!marker.exists(), "a refused request must not count as an agent edit");
+    }
+
+    /// A page whose hostname was re-pointed at 127.0.0.1 is same-origin
+    /// with the API as far as its browser can tell, so it sends no
+    /// `Origin` on a GET -- but its `Host` still names the page's domain.
+    #[test]
+    fn get_under_a_foreign_hostname_is_refused() {
+        let port = 18400;
+        spawn_server(port);
+        let headers = format!("Host: rebound.example.com:{port}\r\n");
+        let (status, body) = http_with_headers(port, "GET", "/project", &headers, "");
+        assert_eq!(status, 403, "response body: {body}");
+        assert!(!body.contains("api-test"), "the project must not be disclosed: {body}");
+    }
+
+    #[test]
+    fn cross_site_refusal_allows_local_clients_only() {
+        for host in [
+            None,
+            Some("localhost"),
+            Some("LocalHost:7357"),
+            Some("127.0.0.1"),
+            Some("127.0.0.1:7357"),
+            Some("[::1]:7357"),
+            Some("10.0.2.2:7357"),
+        ] {
+            assert_eq!(cross_site_refusal(host, None), None, "host {host:?} should be served");
+        }
+        for host in [
+            "",
+            "example.com",
+            "example.com:7357",
+            "localhost.example.com:7357",
+            "127.0.0.1.example.com",
+            "[::1",
+            "[example.com]:7357",
+        ] {
+            assert!(
+                cross_site_refusal(Some(host), None).is_some(),
+                "host {host:?} should be refused"
+            );
+        }
+        for origin in ["https://example.com", "http://localhost:3000", "null"] {
+            assert!(
+                cross_site_refusal(Some("127.0.0.1:7357"), Some(origin)).is_some(),
+                "origin {origin:?} should be refused"
+            );
+        }
     }
 }

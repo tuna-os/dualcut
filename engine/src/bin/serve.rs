@@ -48,6 +48,10 @@ fn main() -> Result<()> {
     println!("dualcut engine API on http://127.0.0.1:{port} (project: {})", path.display());
 
     for mut request in server.incoming_requests() {
+        if let Some(refusal) = dualcut_engine::api::refuse_cross_site(&request) {
+            let _ = request.respond(refusal);
+            continue;
+        }
         let url = request.url().to_string();
         let method = request.method().clone();
         let mut body = String::new();
