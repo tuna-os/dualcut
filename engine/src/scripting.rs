@@ -6,9 +6,39 @@
 
 use crate::document::Project;
 use anyhow::{Context, Result};
+use rustyscript::deno_core::{v8, JsRuntime};
 use rustyscript::{json_args, Module, Runtime, RuntimeOptions};
+use std::sync::Once;
+
+/// Initialise the V8 platform once per process.
+///
+/// V8's default platform write-protects its sandbox tables (the JS dispatch
+/// table, among others) with a memory protection key on CPUs that have PKU
+/// (`pku`/`ospke` in /proc/cpuinfo: most Intel Xeons and many desktop CPUs).
+/// The key's rights live in each thread's PKRU register, which a new thread
+/// inherits from the thread that creates it. So every thread that later
+/// builds a `Runtime` must descend from the thread that ran this; otherwise
+/// `v8::Isolate::New` dies with SIGSEGV (`si_code` SEGV_PKUERR).
+///
+/// [`crate::init`] calls this on the main thread before any binary spawns
+/// threads, so the HTTP API's worker threads and the UI thread can all run
+/// scripts. The libtest harness spawns its worker threads before any test
+/// runs, so unit tests use V8's unprotected platform instead, as deno_core
+/// does for its own tests.
+pub fn init_platform() {
+    static INIT: Once = Once::new();
+    INIT.call_once(|| {
+        #[cfg(not(test))]
+        let platform = v8::new_default_platform(0, false);
+        #[cfg(test)]
+        let platform = v8::new_unprotected_default_platform(0, false);
+        // `true`: import assertions, as rustyscript's own initialisation does.
+        JsRuntime::init_platform(Some(platform.make_shared()), true);
+    });
+}
 
 pub fn run_script(source: &str, project: &Project) -> Result<Project> {
+    init_platform();
     let mut runtime = Runtime::new(RuntimeOptions::default())?;
     let module = Module::new("agent-script.ts", source);
     let handle = runtime.load_module(&module)?;

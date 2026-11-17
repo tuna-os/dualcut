@@ -28,6 +28,10 @@ pub mod vector;
 pub mod vellosrc;
 
 pub fn init() -> Result<()> {
+    // Before anything spawns a thread that may run a script (see
+    // scripting::init_platform for why the order matters).
+    #[cfg(feature = "scripting")]
+    scripting::init_platform();
     gst::init().context("initializing GStreamer")?;
     ges::init().context("initializing GES")?;
     #[cfg(feature = "vector")]
