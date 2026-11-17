@@ -19,7 +19,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        shard: [1, 2, 3, 4, 5, 6]
+        variant: [fixed, prefix]
+        shard: [1, 2, 3, 4, 5, 6, 7]
     container:
       image: quay.io/fedora/fedora:45
     steps:
@@ -59,30 +60,38 @@ jobs:
         with:
           workspaces: engine
 
+      - name: Select variant
+        if: matrix.variant == 'prefix'
+        run: git checkout 9d9c5b5 -- engine/src && git status --short
+
       - name: Build app binary
         working-directory: engine
         run: cargo build --features preview,scripting,vector
 
-      - name: App walkthrough x3 with hang dump
+      - name: App walkthrough x5 with hang dump
         run: |
+          echo "variant=${{ matrix.variant }}"
           grep -m1 'model name' /proc/cpuinfo; grep -m1 -ow pku /proc/cpuinfo || echo no-pku
           Xvfb :95 -screen 0 1280x800x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
-          for i in 1 2 3; do
+          for i in 1 2 3 4 5; do
             echo "=========== attempt $i"
             GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=:95 \
               DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
               DUALCUT_API_PORT=0 DUALCUT_WALKTHROUGH=1 \
-              engine/target/debug/preview engine/examples/demo-project.json > /tmp/app$i.log 2>&1 &
-            pid=$!
+              gdb -q -batch -ex 'handle SIGPIPE nostop noprint' -ex 'handle SIGINT stop' -ex run -ex 'thread apply all bt 25' \
+              --args engine/target/debug/preview engine/examples/demo-project.json > /tmp/app$i.log 2>&1 &
+            gpid=$!
             n=0
-            while kill -0 $pid 2>/dev/null && [ $n -lt 90 ]; do sleep 1; n=$((n+1)); done
-            if kill -0 $pid 2>/dev/null; then
-              echo "HANG after ${n}s"; grep WALKTHROUGH /tmp/app$i.log
-              gdb -q -batch -p $pid -ex 'thread apply all bt 20' 2>&1 | grep -vE '^\[New LWP' | head -400
-              kill -9 $pid
+            while kill -0 $gpid 2>/dev/null && [ $n -lt 90 ]; do sleep 1; n=$((n+1)); done
+            if kill -0 $gpid 2>/dev/null; then
+              echo "HANG variant=${{ matrix.variant }} attempt=$i"
+              pkill -INT -f '^/.*engine/target/debug/preview' || pkill -INT -x preview
+              sleep 20
+              grep WALKTHROUGH-SHOT /tmp/app$i.log
+              grep -vE '^\[(New|Thread) |WALKTHROUGH' /tmp/app$i.log | grep -E '^Thread |^#' | head -500
+              kill -9 $gpid 2>/dev/null; pkill -9 -f engine/target/debug/preview || true
             else
-              wait $pid; echo "exit=$? after ${n}s"; grep -c WALKTHROUGH-SHOT /tmp/app$i.log
+              echo "done variant=${{ matrix.variant }} attempt=$i after ${n}s shots=$(grep -c WALKTHROUGH-SHOT /tmp/app$i.log)"
             fi
-            grep -iE 'missing a plug|segment|abort|panick' /tmp/app$i.log | head -5
           done
