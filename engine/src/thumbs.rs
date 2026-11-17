@@ -284,6 +284,11 @@ pub fn template_png(
     let pad = convert.static_pad("sink").context("convert sink pad")?;
     bin.add_pad(&gst::GhostPad::with_target(&pad)?)?;
     pipeline.set_video_sink(Some(&bin));
+    // A thumbnail never plays audio. Without an explicit sink, GES falls
+    // back to autoaudiosink and opens a real audio device on this worker
+    // thread. In a headless container that probe can deadlock in
+    // jackaudiosink (#279).
+    pipeline.set_audio_sink(Some(&gst::ElementFactory::make("fakesink").build()?));
 
     pipeline.set_state(gst::State::Paused)?;
     let (res, _, _) = pipeline.state(gst::ClockTime::from_seconds(5));

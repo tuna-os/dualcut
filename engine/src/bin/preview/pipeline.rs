@@ -28,6 +28,20 @@ pub(crate) fn make_pipeline(timeline: &ges::Timeline) -> Result<(ges::Pipeline, 
         .context("creating gtk4paintablesink")?;
     let paintable = sink.property::<gtk::gdk::Paintable>("paintable");
     pipeline.preview_set_video_sink(Some(&sink));
+    // Walkthrough mode (headless CI smoke, guide screenshots) never plays
+    // audio. Give it a fakesink so GES does not run autoaudiosink. That
+    // probes every audio sink, jackaudiosink included, and in a container
+    // with PipeWire's libjack but no PipeWire daemon, jack_client_open can
+    // hang in pw_thread_loop_stop while it holds gstjack's client mutex.
+    // The GTK thread then blocks in the next pipeline's Paused transition
+    // (#279).
+    if std::env::var_os("DUALCUT_WALKTHROUGH").is_some() {
+        let fake = gst::ElementFactory::make("fakesink")
+            .property("sync", true)
+            .build()
+            .context("creating fakesink audio sink")?;
+        pipeline.preview_set_audio_sink(Some(&fake));
+    }
     Ok((pipeline, paintable))
 }
 
