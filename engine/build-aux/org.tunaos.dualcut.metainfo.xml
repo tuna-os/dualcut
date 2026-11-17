@@ -61,6 +61,11 @@
     </screenshot>
   </screenshots>
   <releases>
+    <release version="0.27.2" date="2026-11-17">
+      <description>
+        <p>Security fixes: the local agent API refuses requests from web pages (#266); media paths in a project file can no longer add pipeline elements (#280).</p>
+      </description>
+    </release>
     <release version="0.26.0" date="2026-07-19">
       <description>
         <p>Timeline layout overhaul: ruler/lane x-axis alignment, flexible scene duration, lock/hide/mute per lane, symbolic icons, video-above-main-layer, and genuinely blank new projects.</p>
