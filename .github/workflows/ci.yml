@@ -23,6 +23,7 @@ jobs:
         shard: [1, 2, 3, 4, 5, 6, 7]
     container:
       image: quay.io/fedora/fedora:45
+      options: --cap-add SYS_PTRACE
     steps:
       # checkout degrades to a tarball without git in the container.
       - name: Install git first
@@ -68,30 +69,27 @@ jobs:
         working-directory: engine
         run: cargo build --features preview,scripting,vector
 
-      - name: App walkthrough x5 with hang dump
+      - name: Cold-cache app walkthrough x6 with hang dump
         run: |
           echo "variant=${{ matrix.variant }}"
-          grep -m1 'model name' /proc/cpuinfo; grep -m1 -ow pku /proc/cpuinfo || echo no-pku
           Xvfb :95 -screen 0 1280x800x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
           for i in 1 2 3 4 5 6; do
-            echo "=========== attempt $i"
+            rm -rf engine/examples/.dualcut-cache "$HOME/.cache/dualcut" /root/.cache/dualcut
             GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=:95 \
               DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
               DUALCUT_API_PORT=0 DUALCUT_WALKTHROUGH=1 \
-              gdb -q -batch -ex 'handle SIGPIPE nostop noprint' -ex 'handle SIGINT stop' -ex run -ex 'thread apply all bt 25' \
-              --args engine/target/debug/preview engine/examples/demo-project.json > /tmp/app$i.log 2>&1 &
-            gpid=$!
+              engine/target/debug/preview engine/examples/demo-project.json > /tmp/app$i.log 2>&1 &
+            pid=$!
             n=0
-            while kill -0 $gpid 2>/dev/null && [ $n -lt 90 ]; do sleep 1; n=$((n+1)); done
-            if kill -0 $gpid 2>/dev/null; then
+            while kill -0 $pid 2>/dev/null && [ $n -lt 75 ]; do sleep 1; n=$((n+1)); done
+            if kill -0 $pid 2>/dev/null; then
               echo "HANG variant=${{ matrix.variant }} attempt=$i"
-              pkill -INT -f '^/.*engine/target/debug/preview' || pkill -INT -x preview
-              sleep 20
               grep WALKTHROUGH-SHOT /tmp/app$i.log
-              grep -vE '^\[(New|Thread) |WALKTHROUGH' /tmp/app$i.log | grep -E '^Thread |^#' | head -500
-              kill -9 $gpid 2>/dev/null; pkill -9 -f engine/target/debug/preview || true
+              gdb -q -batch -p $pid -ex 'thread apply all bt 25' 2>&1 | grep -E '^Thread |^#' | head -600
+              kill -9 $pid
             else
+              wait $pid || true
               echo "done variant=${{ matrix.variant }} attempt=$i after ${n}s shots=$(grep -c WALKTHROUGH-SHOT /tmp/app$i.log)"
             fi
           done
