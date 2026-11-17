@@ -1,6 +1,7 @@
 //! First-frame thumbnails for media clips (feature = "preview").
 //! Cached as small PNGs next to the shape cache.
 
+use crate::media::{path_str, set_str_property};
 use anyhow::{Context, Result};
 use gst::prelude::*;
 use gstreamer_editing_services as ges;
@@ -22,12 +23,13 @@ pub fn thumbnail_png(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
     std::fs::create_dir_all(cache_dir)?;
 
     let pipeline = gst::parse::launch(&format!(
-        "uridecodebin uri=\"{uri}\" ! videoconvert ! videoscale ! \
+        "uridecodebin name=dec ! videoconvert ! videoscale ! \
          video/x-raw,format=RGB,width={W},height={H},pixel-aspect-ratio=1/1 ! \
          appsink name=sink sync=false"
     ))?
     .downcast::<gst::Pipeline>()
     .map_err(|_| anyhow::anyhow!("not a pipeline"))?;
+    set_str_property(&pipeline, "dec", "uri", uri)?;
     let sink = pipeline
         .by_name("sink")
         .context("appsink missing")?
@@ -95,12 +97,11 @@ pub fn proxy_mp4(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
     let part = cache_dir.join(format!("proxy-{:016x}.mkv.part", fxhash(uri)));
     let _ = std::fs::remove_file(&part);
     let video = format!(
-        "uridecodebin uri=\"{uri}\" name=d \
+        "uridecodebin name=d \
          d. ! queue ! videoconvert ! videoscale ! \
          video/x-raw,width={PROXY_W},pixel-aspect-ratio=1/1 ! \
          jpegenc quality=70 ! queue ! matroskamux name=m ! \
-         filesink location=\"{}\"",
-        part.display()
+         filesink name=out"
     );
     let audio = " d. ! queue ! audioconvert ! audioresample ! vorbisenc ! queue ! m.";
     let desc = if has_audio { format!("{video}{audio}") } else { video };
@@ -108,6 +109,8 @@ pub fn proxy_mp4(cache_dir: &Path, uri: &str) -> Result<PathBuf> {
     let pipeline = gst::parse::launch(&desc)?
         .downcast::<gst::Pipeline>()
         .map_err(|_| anyhow::anyhow!("not a pipeline"))?;
+    set_str_property(&pipeline, "d", "uri", uri)?;
+    set_str_property(&pipeline, "out", "location", path_str(&part)?)?;
     pipeline.set_state(gst::State::Playing)?;
     let bus = pipeline.bus().context("pipeline has no bus")?;
     let mut result = Ok(());
@@ -154,12 +157,13 @@ const PCM_SAMPLE_RATE: u32 = 8000;
 /// silence detection (#46).
 pub fn decode_mono_pcm(uri: &str) -> Result<(Vec<f32>, u32)> {
     let pipeline = gst::parse::launch(&format!(
-        "uridecodebin uri=\"{uri}\" ! audioconvert ! audioresample ! \
+        "uridecodebin name=dec ! audioconvert ! audioresample ! \
          audio/x-raw,format=F32LE,channels=1,rate={PCM_SAMPLE_RATE} ! \
          appsink name=sink sync=false"
     ))?
     .downcast::<gst::Pipeline>()
     .map_err(|_| anyhow::anyhow!("not a pipeline"))?;
+    set_str_property(&pipeline, "dec", "uri", uri)?;
     let sink = pipeline
         .by_name("sink")
         .context("appsink missing")?
@@ -492,6 +496,43 @@ mod tests {
         let out = template_png(&cache, &project, "solid", &dir).expect("template render");
         let img = image::open(&out).expect("valid png");
         assert_eq!((img.width(), img.height()), (320, 180));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A URI that goes on after a `"` with pipeline text of its own: a
+    /// second source feeding a file sink, then a source for the rest of
+    /// the real pipeline to hang from. `tail_source` is that last source,
+    /// audio or video to match what the caller links after the URI.
+    fn uri_with_pipeline_text(media: &Path, planted: &Path, tail_source: &str) -> String {
+        format!(
+            "{}\" ! fakesink audiotestsrc num-buffers=1 ! filesink location=\"{}\" \
+             {tail_source} num-buffers=1 name=\"tail",
+            file_uri(media),
+            planted.display()
+        )
+    }
+
+    #[test]
+    fn decode_mono_pcm_does_not_read_the_uri_as_pipeline_text() {
+        init_once();
+        let dir = tmp_dir("pcm-uri-text");
+        let media = synth_media(&dir);
+        let planted = dir.join("planted");
+        let uri = uri_with_pipeline_text(&media, &planted, "audiotestsrc");
+        let _ = decode_mono_pcm(&uri);
+        assert!(!planted.exists(), "text after a quote in the URI ran as pipeline");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn thumbnail_png_does_not_read_the_uri_as_pipeline_text() {
+        init_once();
+        let dir = tmp_dir("thumbnail-uri-text");
+        let media = synth_media(&dir);
+        let planted = dir.join("planted");
+        let uri = uri_with_pipeline_text(&media, &planted, "videotestsrc");
+        let _ = thumbnail_png(&dir.join("cache"), &uri);
+        assert!(!planted.exists(), "text after a quote in the URI ran as pipeline");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

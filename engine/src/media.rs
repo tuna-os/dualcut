@@ -8,8 +8,36 @@
 //! copy checked that the file exists, one canonicalized, one did
 //! neither. This module is the single definition of both operations.
 
-use anyhow::{bail, Result};
+use anyhow::{bail, Context, Result};
+use gst::prelude::*;
+use gstreamer as gst;
 use std::path::Path;
+
+/// Set a string property on the element called `element` in a pipeline
+/// built with `gst::parse::launch`.
+///
+/// A media URI or a file path must reach its element this way, never by
+/// being formatted into the pipeline text. In that text a `"` ends the
+/// value and the rest is read as more pipeline, so a project `src` (or a
+/// file or directory name) carrying one would add elements of its own:
+/// ones that read, write or send files. A property value is not parsed.
+pub fn set_str_property(
+    pipeline: &gst::Pipeline,
+    element: &str,
+    property: &str,
+    value: &str,
+) -> Result<()> {
+    pipeline
+        .by_name(element)
+        .with_context(|| format!("pipeline has no element named {element:?}"))?
+        .set_property(property, value.to_value());
+    Ok(())
+}
+
+/// A local path as the string an element's `location` property takes.
+pub fn path_str(path: &Path) -> Result<&str> {
+    path.to_str().with_context(|| format!("path is not valid UTF-8: {}", path.display()))
+}
 
 /// `file://` URI for an absolute local path.
 ///

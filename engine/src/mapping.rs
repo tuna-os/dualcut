@@ -506,11 +506,13 @@ fn bake_masked_clip(
     // has no reusable source file, so it bakes exactly its own duration
     // and always starts at offset 0.
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut source_uri = None;
     let source_desc = match &clip.element {
         Element::Video { src, .. } => {
             let uri = crate::media::resolve(src, base_dir)?;
             uri.hash(&mut hasher);
-            format!("uridecodebin uri=\"{uri}\" name=d")
+            source_uri = Some(uri);
+            "uridecodebin name=d".to_string()
         }
         Element::Test {} => {
             "test".hash(&mut hasher);
@@ -534,17 +536,30 @@ fn bake_masked_clip(
         let desc = format!(
             "{source_desc} d. ! queue ! videoconvert ! videoscale ! \
              video/x-raw,format=I420,width={w},height={h},colorimetry=bt601 ! ac.sink \
-             filesrc location=\"{mask}\" ! pngdec ! imagefreeze ! videoconvert ! \
+             filesrc name=mask ! pngdec ! imagefreeze ! videoconvert ! \
              video/x-raw,format=GRAY8,width={w},height={h},colorimetry=bt601 ! ac.alpha \
              alphacombine name=ac ! videoconvert ! video/x-raw,format=A420 ! avenc_ffv1 ! \
-             matroskamux ! filesink location=\"{part}\"",
-            mask = mask_png.display(),
-            part = part.display(),
+             matroskamux ! filesink name=out"
         );
         let pipeline = gst::parse::launch(&desc)
             .context("building mask bake pipeline")?
             .downcast::<gst::Pipeline>()
             .map_err(|_| anyhow::anyhow!("mask bake pipeline is not a Pipeline"))?;
+        if let Some(uri) = &source_uri {
+            crate::media::set_str_property(&pipeline, "d", "uri", uri)?;
+        }
+        crate::media::set_str_property(
+            &pipeline,
+            "mask",
+            "location",
+            crate::media::path_str(&mask_png)?,
+        )?;
+        crate::media::set_str_property(
+            &pipeline,
+            "out",
+            "location",
+            crate::media::path_str(&part)?,
+        )?;
         pipeline.set_state(gst::State::Playing).context("playing mask bake")?;
         let bus = pipeline.bus().context("mask bake pipeline has no bus")?;
         let mut result = Ok(());
@@ -1271,5 +1286,53 @@ mod tests {
             "unexpected animation warnings: {:?}",
             compiled.warnings
         );
+    }
+
+    /// A masked video clip whose `src` goes on after a `"` with pipeline
+    /// text of its own (a source feeding a file sink). The bake must hand
+    /// the whole `src` to the decoder as a URI, which then finds no such
+    /// file, and must not build what follows the quote.
+    #[cfg(feature = "vector")]
+    #[test]
+    fn mask_bake_does_not_read_the_src_as_pipeline_text() {
+        crate::init().ok();
+        let dir = tempfile::tempdir().unwrap();
+        let planted = dir.path().join("planted");
+        let media =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/assets/ball.mp4");
+        let src = format!(
+            "file://{}\" ! fakesink audiotestsrc num-buffers=1 ! filesink location=\"{}\" \
+             videotestsrc num-buffers=1 pattern=\"smpte",
+            media.display(),
+            planted.display()
+        );
+        let project = Project {
+            meta: Meta { title: "mask-src-text".into(), width: 320, height: 180, fps: 25 },
+            library: Vec::new(),
+            defs: Default::default(),
+            scenes: vec![Scene {
+                id: "s1".into(),
+                name: String::new(),
+                duration: 1.0,
+                transition: None,
+                layers: vec![Clip {
+                    id: "masked".into(),
+                    start: 0.0,
+                    duration: 1.0,
+                    element: Element::Video { src, offset: 0.0, volume: 1.0, rate: 1.0 },
+                    transform: Default::default(),
+                    animations: Vec::new(),
+                    effects: vec![crate::document::Effect::Mask {
+                        shape: crate::document::ShapeKind::Circle,
+                        feather: 0.0,
+                        invert: false,
+                    }],
+                }],
+            }],
+            overlays: Vec::new(),
+            scene_lanes: Vec::new(),
+        };
+        let _ = compile(&project, dir.path());
+        assert!(!planted.exists(), "text after a quote in the src ran as pipeline");
     }
 }
