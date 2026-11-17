@@ -62,7 +62,7 @@ jobs:
 
       - name: Select variant
         if: matrix.variant == 'prefix'
-        run: git checkout 9d9c5b5 -- engine/src && git status --short
+        run: sed -i '/scripting::init_platform();/d' engine/src/lib.rs && git diff --stat
 
       - name: Build app binary
         working-directory: engine
@@ -74,7 +74,7 @@ jobs:
           grep -m1 'model name' /proc/cpuinfo; grep -m1 -ow pku /proc/cpuinfo || echo no-pku
           Xvfb :95 -screen 0 1280x800x24 > /tmp/xvfb.log 2>&1 &
           sleep 3
-          for i in 1 2 3 4 5; do
+          for i in 1 2 3 4 5 6; do
             echo "=========== attempt $i"
             GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=:95 \
               DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
