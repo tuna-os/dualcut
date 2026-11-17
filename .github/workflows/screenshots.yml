@@ -1,6 +1,9 @@
 name: screenshots
 
-# Regenerate the user-guide screenshots from the real app and commit them.
+# Regenerate the user-guide screenshots from the real app and upload them as
+# the guide-screenshots artifact. Nothing is pushed: main is protected by a
+# required check, so refreshed images are committed by a maintainer in a
+# normal PR (the job summary says when that is needed).
 #
 # scripts/walkthrough.sh already existed and already did the hard part -- it
 # drives the app's DUALCUT_WALKTHROUGH mode under Xvfb and grabs a frame per
@@ -160,40 +163,24 @@ jobs:
           done
           [ "$fail" -eq 0 ]
 
+      - name: Report whether docs/guide needs a refresh
+        run: |
+          # docs/guide was removed before the build, so any difference against
+          # the index means the committed images are stale.
+          git add -N docs/guide
+          if git diff --quiet -- docs/guide; then
+            echo "docs/guide screenshots are up to date." >> "$GITHUB_STEP_SUMMARY"
+          else
+            {
+              echo "### docs/guide screenshots are out of date"
+              echo "Download the \`guide-screenshots\` artifact and commit it to docs/guide/ in a normal PR."
+              echo
+              git diff --stat -- docs/guide
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
           name: guide-screenshots
           path: docs/guide/
-
-  # Only a successful capture from trusted main code may publish. PR artifacts
-  # stay in their own run and never reach this write-capable job.
-  publish:
-    name: publish
-    needs: capture
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-    steps:
-      - uses: actions/checkout@v7.0.1 # zizmor: ignore[artipacked] later step pushes screenshots to main
-        with:
-          ref: main
-
-      - name: Drop committed images before restoring the capture
-        run: rm -rf docs/guide
-
-      - uses: actions/download-artifact@v8.0.2
-        with:
-          name: guide-screenshots
-          path: docs/guide/
-
-      - name: Commit refreshed screenshots
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add docs/guide
-          if git diff --cached --quiet; then echo "screenshots unchanged"; exit 0; fi
-          git commit -m "docs: refresh guide screenshots"
-          git pull --rebase origin main
-          git push
