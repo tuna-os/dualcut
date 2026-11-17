@@ -19,6 +19,7 @@ workflows:
         - 'flatpak/flatpak-github-actions@v6.8'
         - 'softprops/action-gh-release@v3.0.4'
         - 'swatinem/rust-cache@v2.9.3'
+        - 'tuna-os/.github@main'
     '.github/workflows/publish-flatpak.yml': []
     '.github/workflows/screenshots.yml':
         - 'actions/checkout@v7.0.1'
@@ -74,6 +75,11 @@ dependencies:
         commit: 'sha1-d1527c8f67ef9af357290475d4af4b0fab8f12e0'
         owner_id: 580492
         repo_id: 298565987
+    'tuna-os/.github@main':
+        ref: 'main'
+        commit: 'sha1-6c76230bdd69e19634d9c74d5e3edbd8eacadd9f'
+        owner_id: 223733964
+        repo_id: 1187761922
     'zizmorcore/zizmor-action@v0.8.1':
         ref: 'v0.8.1'
         commit: 'sha1-45d7276c9ca790aabd705e31ca99c6185c3e76dd'

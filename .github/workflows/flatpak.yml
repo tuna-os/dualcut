@@ -54,6 +54,13 @@ jobs:
           python3 /tmp/flatpak-cargo-generator.py engine/Cargo.lock \
             -o engine/build-aux/cargo-sources.json
 
+      # flatpak-builder updates the runtimes baked into the image. Some
+      # runner hosts' overlayfs cannot rename image-layer directories, and
+      # that update fails with "Invalid cross-device link". The action
+      # copies the installation up only on those hosts (tuna-os/.github#380).
+      - name: Make the image's Flatpak installations updatable
+        uses: tuna-os/.github/.github/actions/flatpak-copy-up@main
+
       - name: Build bundle
         uses: flatpak/flatpak-github-actions/flatpak-builder@v6.8
         with:
