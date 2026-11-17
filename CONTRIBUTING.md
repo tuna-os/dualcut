@@ -283,8 +283,12 @@ fails if they drift.
 
 ### If you change docs
 
-- User-facing behavior belongs in `docs/USER_GUIDE.md`; screenshots are
-  regenerated automatically on every release.
+- User-facing behavior belongs in `docs/USER_GUIDE.md`.
+- CI does not commit screenshots to `main`. The `screenshots` workflow
+  uploads them as the `guide-screenshots` artifact, and its job summary
+  says when `docs/guide/` is out of date. If your change makes them out of
+  date, download that artifact and commit it to `docs/guide/` in your pull
+  request.
 - Recipes (e.g. auto-captions) live in `docs/recipes/`.
 - Architectural decisions go in `docs/adr/`.
 
