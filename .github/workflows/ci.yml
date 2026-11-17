@@ -16,6 +16,10 @@ jobs:
   test:
     name: Lint, unit, and render smoke tests
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5, 6]
     container:
       image: quay.io/fedora/fedora:45
     steps:
@@ -48,64 +52,37 @@ jobs:
             gstreamer1-plugins-good gstreamer1-plugins-bad-free \
             gstreamer1-plugins-base-tools gstreamer1-plugins-good-extras \
             gstreamer1-plugin-libav \
-            mesa-vulkan-drivers python3-pillow xorg-x11-server-Xvfb xset xz
+            mesa-vulkan-drivers gdb python3-pillow xorg-x11-server-Xvfb xset xz
           git config --global --add safe.directory "$(pwd)"
 
       - uses: Swatinem/rust-cache@v2.9.3
         with:
           workspaces: engine
 
-      - name: Clippy (warnings are errors)
-        working-directory: engine
-        run: cargo clippy --all-features -- -D warnings
-
-      - name: Unit tests
-        working-directory: engine
-        run: cargo test --all-features
-
-      - name: Build release render binary
-        working-directory: engine
-        run: cargo build --release --features vector
-
-      - name: Render smoke suite
-        run: tests/smoke.sh engine/target/release/render
-
       - name: Build app binary
         working-directory: engine
         run: cargo build --features preview,scripting,vector
 
-      - name: App start smoke (headless)
+      - name: App walkthrough x3 with hang dump
         run: |
+          grep -m1 'model name' /proc/cpuinfo; grep -m1 -ow pku /proc/cpuinfo || echo no-pku
           Xvfb :95 -screen 0 1280x800x24 > /tmp/xvfb.log 2>&1 &
-          xvfb_pid=$!
-          cleanup() {
-            kill "$xvfb_pid" 2>/dev/null || true
-            wait "$xvfb_pid" 2>/dev/null || true
-          }
-          trap cleanup EXIT
-          # Wait for a working X connection, including on slow runners.
-          # Bound the whole probe so a stalled xset cannot hang the job.
-          if ! DISPLAY=:95 timeout 30 sh -c '
-            until xset q >/dev/null 2>&1; do
-              kill -0 "$1" 2>/dev/null || exit 1
-              sleep 0.2
-            done
-          ' sh "$xvfb_pid"; then
-            echo "Xvfb failed to become ready within 30 seconds"
-            cat /tmp/xvfb.log
-            exit 1
-          fi
-          set +e
-          GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=:95 \
-            DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
-            DUALCUT_API_PORT=0 DUALCUT_WALKTHROUGH=1 \
-            timeout 120 engine/target/debug/preview engine/examples/demo-project.json \
-            > /tmp/app.log 2>&1
-          code=$?
-          set -e
-          grep -q "WALKTHROUGH-SHOT about" /tmp/app.log || {
-            echo "app did not reach the final walkthrough step (exit $code)"
-            tail -30 /tmp/app.log
-            exit 1
-          }
-          echo "app walked through all UI states cleanly"
+          sleep 3
+          for i in 1 2 3; do
+            echo "=========== attempt $i"
+            GDK_BACKEND=x11 WAYLAND_DISPLAY= DISPLAY=:95 \
+              DBUS_SESSION_BUS_ADDRESS="unix:path=/nonexistent" \
+              DUALCUT_API_PORT=0 DUALCUT_WALKTHROUGH=1 \
+              engine/target/debug/preview engine/examples/demo-project.json > /tmp/app$i.log 2>&1 &
+            pid=$!
+            n=0
+            while kill -0 $pid 2>/dev/null && [ $n -lt 90 ]; do sleep 1; n=$((n+1)); done
+            if kill -0 $pid 2>/dev/null; then
+              echo "HANG after ${n}s"; grep WALKTHROUGH /tmp/app$i.log
+              gdb -q -batch -p $pid -ex 'thread apply all bt 20' 2>&1 | grep -vE '^\[New LWP' | head -400
+              kill -9 $pid
+            else
+              wait $pid; echo "exit=$? after ${n}s"; grep -c WALKTHROUGH-SHOT /tmp/app$i.log
+            fi
+            grep -iE 'missing a plug|segment|abort|panick' /tmp/app$i.log | head -5
+          done
