@@ -250,13 +250,16 @@ next section before you submit changes.
   GPU backend that works (or a compatible software driver). For smoke tests
   of the Linux UI, use the CI Xvfb recipe. Do not force a Wayland session.
 
+More symptoms and fixes are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
+
 ## Making a change
 
 1. **Branch from `main`** — use a descriptive name, e.g.
    `git checkout -b fix/crossfade-offset` or `feat/export-webm`.
 2. **Keep commits focused** and sign them with DCO:
    `git commit -s` (your commit must carry a `Signed-off-by` trailer).
-3. **Run the checks CI will run** before pushing:
+3. **Run the checks CI will run** before pushing. [docs/TESTING.md](docs/TESTING.md)
+   describes each layer and how CI runs it:
 
    ```sh
    # 1. Schema copies must be byte-identical to the agent skill bundle
