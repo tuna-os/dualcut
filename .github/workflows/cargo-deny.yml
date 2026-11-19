@@ -1,0 +1,32 @@
+name: cargo-deny
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  schedule:
+    # New advisories land without any change here; re-check weekly.
+    - cron: '17 5 * * 1'
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  # Fails on any RustSec advisory against engine/Cargo.lock that
+  # engine/deny.toml does not ignore. The shipped Flatpak is built with
+  # `preview,scripting,vector`, so check with all features.
+  advisories:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: EmbarkStudios/cargo-deny-action@v2.1.2
+        with:
+          manifest-path: engine/Cargo.toml
+          command: check advisories
+          arguments: --all-features
