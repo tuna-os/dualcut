@@ -6,6 +6,9 @@ workflows:
     '.github/workflows/actions-security.yml':
         - 'actions/checkout@v7.0.1'
         - 'zizmorcore/zizmor-action@v0.8.1'
+    '.github/workflows/cargo-deny.yml':
+        - 'actions/checkout@v7.0.1'
+        - 'embarkstudios/cargo-deny-action@v2.1.2'
     '.github/workflows/ci.yml':
         - 'actions/checkout@v7.0.1'
         - 'swatinem/rust-cache@v2.9.3'
@@ -49,6 +52,11 @@ dependencies:
         repo_id: 200299178
         uses:
             - 'actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd'
+    'embarkstudios/cargo-deny-action@v2.1.2':
+        ref: 'v2.1.2'
+        commit: 'sha1-70f81531115945ba6eb6b941ec9d39d063438eb9'
+        owner_id: 44887257
+        repo_id: 228054692
     'flatpak/flatpak-github-actions@v6.8':
         ref: 'v6.8'
         commit: 'sha1-79327416609af08178ad73b352877e51450790b3'
