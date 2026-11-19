@@ -1,0 +1,32 @@
+# cargo-deny configuration for the advisory check on engine/Cargo.lock.
+# Run it from this directory:
+#
+#   cargo deny --all-features check advisories
+#
+# `--all-features` because the shipped Flatpak is built with
+# `preview,scripting,vector`, and `scripting` brings in most of the graph.
+#
+# An `ignore` entry needs a reason and a re-check date beside it.
+
+[advisories]
+# Yanked versions only warn: they still build.
+yanked = "warn"
+# Unmaintained is not a gate. The locked graph carries unmaintained notices
+# on transitive crates of rustyscript with no upgrade path (bincode,
+# smartstring, unic-*, paste): docs/adr/0005-rustyscript-residual-cve-risk.md
+# accepts them. Unmaintained is not vulnerable.
+unmaintained = "none"
+ignore = [
+    # rsa 0.9.10, through rustyscript -> deno_crypto. No fixed release exists.
+    # Accepted in docs/adr/0005-rustyscript-residual-cve-risk.md: the only
+    # caller is WebCrypto inside an edit() script, and no remote party can
+    # time it.
+    { id = "RUSTSEC-2023-0071", reason = "rsa via rustyscript; no fixed release; accepted in docs/adr/0005; re-check 2027-05-01" },
+    # crypto-bigint 0.5.5, through rustyscript -> deno_crypto -> the p256,
+    # p384 and p521 curve crates. The fix is 0.7.6, which rustyscript 0.12.3
+    # cannot resolve to. Same stack and same exposure as the rsa entry above:
+    # operations that should take constant time do not, which matters only
+    # to a party that can time them. Published one day after ADR 0005, so
+    # the ADR does not name it.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint via rustyscript; fix needs a rustyscript release; same exposure as RUSTSEC-2023-0071; re-check 2027-05-01" },
+]
