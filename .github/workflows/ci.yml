@@ -16,6 +16,7 @@ jobs:
   test:
     name: Lint, unit, and render smoke tests
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     container:
       image: quay.io/fedora/fedora:45
     steps:
@@ -61,6 +62,10 @@ jobs:
 
       - name: Unit tests
         working-directory: engine
+        # autoaudiosink probes jackaudiosink; with PipeWire's libjack and no
+        # daemon, jack_client_open hangs and deadlocks the pipeline tests (#279).
+        env:
+          GST_PLUGIN_FEATURE_RANK: jackaudiosink:NONE,pipewiresink:NONE
         run: cargo test --all-features
 
       - name: Build release render binary
