@@ -2,12 +2,12 @@
 
 > **Deprecation notice:** New development has moved to
 > [shrimply](https://github.com/soirihiroka/shrimply). Please port useful
-> ideas there instead of starting new feature work in this repository. See
+> ideas there. Do not start new feature work in this repository. See
 > [DEPRECATED.md](DEPRECATED.md).
 
-Thanks for helping with **dualcut** — the GNOME video editor with dual usage:
-edit manually in the timeline/inspector, or programmatically via a live JSON
-document, TypeScript scripts, and an HTTP API.
+Thank you for your help with **dualcut**, the GNOME video editor with dual
+usage. You can edit manually in the timeline/inspector, or programmatically
+via a live JSON document, TypeScript scripts, and an HTTP API.
 
 This guide covers how to build, what to read before you start, and what CI
 checks your contribution must pass.
@@ -258,7 +258,7 @@ More symptoms and fixes are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md
    `git checkout -b fix/crossfade-offset` or `feat/export-webm`.
 2. **Keep commits focused** and sign them with DCO:
    `git commit -s` (your commit must carry a `Signed-off-by` trailer).
-3. **Run the checks CI will run** before pushing. [docs/TESTING.md](docs/TESTING.md)
+3. **Run the checks CI will run** before you push. [docs/TESTING.md](docs/TESTING.md)
    describes each layer and how CI runs it:
 
    ```sh
@@ -276,7 +276,7 @@ More symptoms and fixes are in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md
    (cd engine && cargo build --release --features vector)
    ```
 
-4. **Open a PR** describing what changed and why; link any related issue.
+4. **Open a PR** that says what changed and why; link any related issue.
 
 ### If you change the schema
 
@@ -303,6 +303,6 @@ TunaOS organization (see the [org-level Code of Conduct](https://github.com/tuna
 
 ## Questions?
 
-Open an issue — the maintainers and the automated hive agents monitor the
-tracker. For anything about the document model specifically, `CONTEXT.md`
+Open an issue — the maintainers and the automated agents of the hive monitor
+the tracker. For anything about the document model specifically, `CONTEXT.md`
 and `AGENTS.md` are the authoritative references.

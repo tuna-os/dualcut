@@ -1,6 +1,6 @@
 # dualcut
 
-> **Deprecated:** Development has moved to [shrimply](https://github.com/soirihiroka/shrimply), which is the recommended project for new work. This repository is retained for its history and existing releases; please port useful ideas here rather than starting new feature work in dualcut.
+> **Deprecated:** Development has moved to [shrimply](https://github.com/soirihiroka/shrimply), which is the recommended project for new work. We keep this repository for its history and existing releases. Port useful ideas to shrimply, and do not start new feature work in dualcut.
 
 A GNOME video editor with **dual usage**: edit manually (scene timeline +
 inspector) or programmatically (live JSON document, TypeScript scripts,

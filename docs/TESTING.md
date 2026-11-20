@@ -60,7 +60,7 @@ CI or on a desktop session. CI starts Xvfb for it.
 ## Which CI steps block a PR
 
 The `test` job in `ci.yml` runs the steps in the table above, in order. A
-failing step fails the job. The schema sync check, clippy, unit tests, the
+step that fails makes the job fail. The schema sync check, clippy, unit tests, the
 render smoke suite, and the app start smoke all count. Branch protection rules
 are set in repository settings, not in this tree.
 
@@ -73,7 +73,7 @@ threshold. The patch target is 70%, and it is informational only.
 
 ## Debugging a CI failure locally
 
-1. Find the failing step in the `test` job log.
+1. Find the step that failed in the `test` job log.
 2. Run the same command from the table above in a Fedora 45 environment.
    [CONTRIBUTING.md](../CONTRIBUTING.md) has a Podman command for one.
 3. For the render smoke suite, pass the same binary path that CI uses. Build
