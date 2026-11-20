@@ -68,8 +68,8 @@ port. Check the port you set, then run the `curl` command above again.
 `localhost` or an IP address. Browser pages cannot use the API. Use `curl` or
 a script instead.
 
-**400 with an error message.** The body was rejected and the project file was
-not changed. Read the `error` field. For `/op`, check the op name and its
+**400 with an error message.** The server rejected the body and did not change
+the project file. Read the `error` field. For `/op`, check the op name and its
 required fields. For `/project`, check the document against
 [`engine/schema/dualcut.schema.json`](../engine/schema/dualcut.schema.json).
 
