@@ -47,7 +47,9 @@ jobs:
           GENERATOR_SHA256: 0a2db6be87d75910facef28ab46d4d6460802e8419ab850d0caa6a364d26b380
         run: |
           set -eu
-          pip3 install --break-system-packages aiohttp tomlkit || pip3 install aiohttp tomlkit
+          # aiohttp and tomlkit ship in the build image; fail fast if one is missing
+          # rather than silently falling back to an unpinned PyPI install.
+          python3 -c 'import aiohttp, tomlkit'
           curl -fsSLo /tmp/flatpak-cargo-generator.py \
             "https://raw.githubusercontent.com/flatpak/flatpak-builder-tools/${GENERATOR_COMMIT}/cargo/flatpak-cargo-generator.py"
           echo "${GENERATOR_SHA256}  /tmp/flatpak-cargo-generator.py" | sha256sum -c -
