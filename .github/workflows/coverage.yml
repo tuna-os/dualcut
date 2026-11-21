@@ -51,7 +51,9 @@ jobs:
           git config --global --add safe.directory "$(pwd)"
 
       - name: Install cargo-llvm-cov (not packaged in Fedora)
-        run: cargo install cargo-llvm-cov --root /usr/local
+        # Pinned + --locked so a new upstream release cannot change CI silently.
+        # To update: bump --version to the latest cargo-llvm-cov release.
+        run: cargo install cargo-llvm-cov --version 0.9.1 --locked --root /usr/local
 
       - uses: Swatinem/rust-cache@v2.9.3
         with:
