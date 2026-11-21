@@ -13,6 +13,7 @@ pub(crate) fn export_target(dir: &std::path::Path, name: &str) -> String {
 /// Kicks off (or queues) one render: (Export button, output path, profile).
 pub(crate) type StartRender = Rc<dyn Fn(gtk::Button, String, String)>;
 
+#[allow(clippy::too_many_lines)] // baseline (#273): remove when split
 pub(crate) fn show_export_dialog(editor: &Rc<Editor>, parent: Option<&gtk::Window>) {
     let (project_json, base_dir, title) = {
         let st = editor.state.borrow();

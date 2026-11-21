@@ -184,6 +184,7 @@ pub fn compile_scaled(
     Ok(Compiled { timeline, warnings })
 }
 
+#[allow(clippy::too_many_lines)] // baseline (#273): remove when split
 fn add_clip(
     project: &Project,
     slot: &[ges::Layer],

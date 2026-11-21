@@ -54,6 +54,7 @@ impl Editor {
         col
     }
 
+    #[allow(clippy::too_many_lines)] // baseline (#273): remove when split
     pub(crate) fn rebuild_strip(self: &Rc<Self>) {
         let ui = self.ui.borrow();
         let Some(ui) = ui.as_ref() else { return };
@@ -243,6 +244,7 @@ impl Editor {
     }
 
 
+    #[allow(clippy::too_many_lines)] // baseline (#273): remove when split
     pub(crate) fn rebuild_inspector(self: &Rc<Self>) {
         let (project, selected) = {
             let st = self.state.borrow();
