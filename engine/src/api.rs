@@ -8,10 +8,18 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use tiny_http::{Header, Method, Response, Server};
 
-fn json_response(status: u16, body: String) -> Response<std::io::Cursor<Vec<u8>>> {
+/// Responses every route answers with: JSON body, status, content type.
+pub type JsonResponse = Response<std::io::Cursor<Vec<u8>>>;
+
+fn json_response(status: u16, body: String) -> JsonResponse {
     Response::from_string(body)
         .with_status_code(status)
         .with_header(Header::from_bytes("Content-Type", "application/json").unwrap())
+}
+
+/// The `{"error":…}` envelope both servers use for every failure.
+fn error_response(status: u16, e: &anyhow::Error) -> JsonResponse {
+    json_response(status, format!(r#"{{"error":{:?}}}"#, e.to_string()))
 }
 
 /// Leave a short-lived marker next to the project's cache dir so the GUI's
@@ -69,9 +77,7 @@ fn is_localhost_or_ip(host: &str) -> bool {
 
 /// The 403 for a request `cross_site_refusal` turns away, or `None` to
 /// carry on. Both servers call this before they read the body.
-pub fn refuse_cross_site(
-    request: &tiny_http::Request,
-) -> Option<Response<std::io::Cursor<Vec<u8>>>> {
+pub fn refuse_cross_site(request: &tiny_http::Request) -> Option<JsonResponse> {
     let header = |name: &'static str| {
         request.headers().iter().find(|h| h.field.equiv(name)).map(|h| h.value.as_str())
     };
@@ -79,13 +85,75 @@ pub fn refuse_cross_site(
         .map(|why| json_response(403, serde_json::json!({ "error": why }).to_string()))
 }
 
-/// Serve the agent API for `path` on 127.0.0.1:`port`, blocking forever.
-/// Spawn on a thread to run alongside a UI.
-pub fn serve_file_api(path: PathBuf, port: u16) -> Result<()> {
-    let server = Server::http(("127.0.0.1", port))
-        .map_err(|e| anyhow::anyhow!("binding 127.0.0.1:{port}: {e}"))?;
-    println!("agent API on http://127.0.0.1:{port} (project: {})", path.display());
+/// Where a server keeps the project between requests. The shared routes
+/// in [`serve_api`] see the project only through this seam, so both
+/// servers answer them the same way.
+pub trait ProjectStore {
+    /// The current project.
+    fn load(&self) -> Result<Project>;
+    /// Replace the project. `summary` names the edit for the app's Edit
+    /// History. An error here is a server error (`500`).
+    fn save(&self, project: &Project, summary: &str) -> Result<()>;
+}
 
+/// The project file on disk is the store: every request reads it and
+/// every write replaces it, so the app holding the file sees agent edits
+/// live (the `preview` app).
+pub struct FileStore {
+    pub path: PathBuf,
+}
+
+impl ProjectStore for FileStore {
+    fn load(&self) -> Result<Project> {
+        Project::from_json(&std::fs::read_to_string(&self.path)?)
+            .with_context(|| format!("loading {}", self.path.display()))
+    }
+
+    fn save(&self, project: &Project, summary: &str) -> Result<()> {
+        std::fs::write(&self.path, project.to_json())
+            .with_context(|| format!("saving {}", self.path.display()))?;
+        touch_agent_marker(&self.path, summary);
+        Ok(())
+    }
+}
+
+/// The project is held in memory; a save also writes it to `path`, and
+/// memory changes only once that write succeeded (the headless `serve`
+/// bin).
+pub struct MemoryStore {
+    project: std::sync::Mutex<Project>,
+    path: PathBuf,
+}
+
+impl MemoryStore {
+    pub fn new(project: Project, path: PathBuf) -> Self {
+        Self { project: std::sync::Mutex::new(project), path }
+    }
+}
+
+impl ProjectStore for MemoryStore {
+    fn load(&self) -> Result<Project> {
+        Ok(self.project.lock().unwrap().clone())
+    }
+
+    fn save(&self, project: &Project, _summary: &str) -> Result<()> {
+        let mut held = self.project.lock().unwrap();
+        std::fs::write(&self.path, project.to_json())
+            .with_context(|| format!("saving {}", self.path.display()))?;
+        *held = project.clone();
+        Ok(())
+    }
+}
+
+/// Answer requests on `server` until it closes. Each request is first
+/// checked by [`refuse_cross_site`], then offered to `extra` (the routes
+/// only one server has), then to the routes both servers share:
+/// `GET/POST /project`, `POST /script`, `GET /status` and the `404`.
+pub fn serve_api<S: ProjectStore>(
+    server: &Server,
+    store: &S,
+    extra: impl Fn(&S, &Method, &str, &str) -> Option<JsonResponse>,
+) {
     for mut request in server.incoming_requests() {
         if let Some(refusal) = refuse_cross_site(&request) {
             let _ = request.respond(refusal);
@@ -96,116 +164,143 @@ pub fn serve_file_api(path: PathBuf, port: u16) -> Result<()> {
         let mut body = String::new();
         let _ = request.as_reader().read_to_string(&mut body);
 
-        let load = || -> Result<Project> {
-            Project::from_json(&std::fs::read_to_string(&path)?)
-                .with_context(|| format!("loading {}", path.display()))
-        };
-
-        let response = match (&method, url.as_str()) {
-            (Method::Get, "/project") => match load() {
-                Ok(p) => json_response(200, p.to_json()),
-                Err(e) => json_response(500, format!(r#"{{"error":{:?}}}"#, e.to_string())),
-            },
-            (Method::Post, "/project") => match Project::from_json(&body) {
-                Ok(project) => match std::fs::write(&path, project.to_json()) {
-                    Ok(()) => {
-                        touch_agent_marker(&path, "Replaced project (agent)");
-                        json_response(200, r#"{"ok":true}"#.into())
-                    }
-                    Err(e) => json_response(500, format!(r#"{{"error":{:?}}}"#, e.to_string())),
-                },
-                Err(e) => json_response(400, format!(r#"{{"error":{:?}}}"#, e.to_string())),
-            },
-            #[cfg(feature = "scripting")]
-            (Method::Post, "/script") => match load()
-                .and_then(|p| crate::scripting::run_script(&body, &p))
-            {
-                Ok(edited) => match std::fs::write(&path, edited.to_json()) {
-                    Ok(()) => {
-                        touch_agent_marker(&path, "Ran script (agent)");
-                        json_response(200, r#"{"ok":true}"#.into())
-                    }
-                    Err(e) => json_response(500, format!(r#"{{"error":{:?}}}"#, e.to_string())),
-                },
-                Err(e) => json_response(400, format!(r#"{{"error":{:?}}}"#, e.to_string())),
-            },
-            // Editing ops with nontrivial math, so agents don't have to
-            // reimplement offset/animation splitting. Body: {"op": ...}.
-            (Method::Post, "/op") => match load().and_then(|mut p| {
-                let req: serde_json::Value = serde_json::from_str(&body)?;
-                let op = req["op"].as_str().unwrap_or_default().to_string();
-                let id = req["id"].as_str().unwrap_or_default().to_string();
-                let result = match op.as_str() {
-                    "split" => {
-                        let at = req["at"].as_f64().context("'at' (seconds) required")?;
-                        let new_id = crate::document::split_clip(&mut p, &id, at)?;
-                        serde_json::json!({"ok": true, "new_id": new_id})
-                    }
-                    "ripple_delete" => {
-                        crate::document::ripple_delete(&mut p, &id)?;
-                        serde_json::json!({"ok": true})
-                    }
-                    "detach_audio" => {
-                        let new_id = crate::document::detach_audio(&mut p, &id)
-                            .context("clip is not a video clip")?;
-                        serde_json::json!({"ok": true, "new_id": new_id})
-                    }
-                    "move_to_lane" => {
-                        let lane = req["lane"].as_u64().context("'lane' required")? as usize;
-                        let at = req["at"].as_f64().context("'at' (seconds) required")?;
-                        crate::document::move_clip_to_lane(&mut p, &id, lane, at)?;
-                        serde_json::json!({"ok": true})
-                    }
-                    // Detect + splice out silent stretches of the clip's
-                    // own media (#46). threshold_db/min_duration optional
-                    // (default -40.0 dBFS / 0.5s).
-                    #[cfg(feature = "preview")]
-                    "remove_silence" => {
-                        let threshold_db = req["threshold_db"].as_f64().unwrap_or(-40.0);
-                        let min_duration = req["min_duration"].as_f64().unwrap_or(0.5);
-                        let clip = crate::document::find_clip(&p, &id).context("no such clip")?;
-                        let src = match &clip.element {
-                            crate::document::Element::Video { src, .. }
-                            | crate::document::Element::Audio { src, .. } => src.clone(),
-                            _ => anyhow::bail!("clip {id:?} has no media"),
-                        };
-                        let base_dir = path.parent().unwrap_or_else(|| std::path::Path::new("."));
-                        let uri = crate::media::resolve(&src, base_dir)
-                            .context("resolving media path")?;
-                        let ranges = crate::silence::detect_silence_in_uri(&uri, threshold_db, min_duration)?;
-                        let removed = crate::document::remove_silence(&mut p, &id, &ranges)?;
-                        serde_json::json!({"ok": true, "removed": removed})
-                    }
-                    other => anyhow::bail!(
-                        "unknown op {other:?} (split, ripple_delete, detach_audio, move_to_lane, remove_silence)"
-                    ),
-                };
-                p.validate()?;
-                std::fs::write(&path, p.to_json())?;
-                touch_agent_marker(&path, &format!("{op} {id} (agent)"));
-                Ok(result)
-            }) {
-                Ok(v) => json_response(200, v.to_string()),
-                Err(e) => json_response(400, format!(r#"{{"error":{:?}}}"#, e.to_string())),
-            },
-            (Method::Get, "/status") => match load() {
-                Ok(p) => json_response(
-                    200,
-                    serde_json::json!({
-                        "engine": "dualcut",
-                        "version": env!("CARGO_PKG_VERSION"),
-                        "project": p.meta.title,
-                        "duration": p.duration(),
-                        "scenes": p.scenes.len(),
-                    })
-                    .to_string(),
-                ),
-                Err(e) => json_response(500, format!(r#"{{"error":{:?}}}"#, e.to_string())),
-            },
-            _ => json_response(404, r#"{"error":"not found"}"#.into()),
-        };
+        let response = extra(store, &method, &url, &body)
+            .unwrap_or_else(|| shared_route(store, &method, &url, &body));
         let _ = request.respond(response);
     }
+}
+
+fn shared_route(store: &dyn ProjectStore, method: &Method, url: &str, body: &str) -> JsonResponse {
+    let ok = || json_response(200, r#"{"ok":true}"#.into());
+    match (method, url) {
+        (Method::Get, "/project") => match store.load() {
+            Ok(p) => json_response(200, p.to_json()),
+            Err(e) => error_response(500, &e),
+        },
+        (Method::Post, "/project") => match Project::from_json(body) {
+            Ok(project) => match store.save(&project, "Replaced project (agent)") {
+                Ok(()) => ok(),
+                Err(e) => error_response(500, &e),
+            },
+            Err(e) => error_response(400, &e),
+        },
+        #[cfg(feature = "scripting")]
+        (Method::Post, "/script") => {
+            match store.load().and_then(|p| crate::scripting::run_script(body, &p)) {
+                Ok(edited) => match store.save(&edited, "Ran script (agent)") {
+                    Ok(()) => ok(),
+                    Err(e) => error_response(500, &e),
+                },
+                Err(e) => error_response(400, &e),
+            }
+        }
+        #[cfg(not(feature = "scripting"))]
+        (Method::Post, "/script") => json_response(
+            501,
+            r#"{"error":"engine built without the scripting feature"}"#.into(),
+        ),
+        (Method::Get, "/status") => match store.load() {
+            Ok(p) => json_response(
+                200,
+                serde_json::json!({
+                    "engine": "dualcut",
+                    "version": env!("CARGO_PKG_VERSION"),
+                    "project": p.meta.title,
+                    "duration": p.duration(),
+                    "scenes": p.scenes.len(),
+                })
+                .to_string(),
+            ),
+            Err(e) => error_response(500, &e),
+        },
+        _ => json_response(404, r#"{"error":"not found"}"#.into()),
+    }
+}
+
+/// Apply one editing op (`{"op": ...}`, see AGENTS.md → `/op`) to `p` and
+/// return its success body. Ops with nontrivial math, so agents don't have
+/// to reimplement offset/animation splitting. `base_dir` resolves the
+/// clip's media for `remove_silence`. The caller validates and saves.
+#[cfg_attr(not(feature = "preview"), allow(unused_variables))]
+pub fn apply_op(
+    p: &mut Project,
+    req: &serde_json::Value,
+    base_dir: &Path,
+) -> Result<serde_json::Value> {
+    let op = req["op"].as_str().unwrap_or_default();
+    let id = req["id"].as_str().unwrap_or_default();
+    Ok(match op {
+        "split" => {
+            let at = req["at"].as_f64().context("'at' (seconds) required")?;
+            let new_id = crate::document::split_clip(p, id, at)?;
+            serde_json::json!({"ok": true, "new_id": new_id})
+        }
+        "ripple_delete" => {
+            crate::document::ripple_delete(p, id)?;
+            serde_json::json!({"ok": true})
+        }
+        "detach_audio" => {
+            let new_id =
+                crate::document::detach_audio(p, id).context("clip is not a video clip")?;
+            serde_json::json!({"ok": true, "new_id": new_id})
+        }
+        "move_to_lane" => {
+            let lane = req["lane"].as_u64().context("'lane' required")? as usize;
+            let at = req["at"].as_f64().context("'at' (seconds) required")?;
+            crate::document::move_clip_to_lane(p, id, lane, at)?;
+            serde_json::json!({"ok": true})
+        }
+        // Detect + splice out silent stretches of the clip's own media
+        // (#46). threshold_db/min_duration optional (default -40.0 dBFS /
+        // 0.5s).
+        #[cfg(feature = "preview")]
+        "remove_silence" => {
+            let threshold_db = req["threshold_db"].as_f64().unwrap_or(-40.0);
+            let min_duration = req["min_duration"].as_f64().unwrap_or(0.5);
+            let clip = crate::document::find_clip(p, id).context("no such clip")?;
+            let src = match &clip.element {
+                crate::document::Element::Video { src, .. }
+                | crate::document::Element::Audio { src, .. } => src.clone(),
+                _ => anyhow::bail!("clip {id:?} has no media"),
+            };
+            let uri = crate::media::resolve(&src, base_dir).context("resolving media path")?;
+            let ranges = crate::silence::detect_silence_in_uri(&uri, threshold_db, min_duration)?;
+            let removed = crate::document::remove_silence(p, id, &ranges)?;
+            serde_json::json!({"ok": true, "removed": removed})
+        }
+        other => anyhow::bail!(
+            "unknown op {other:?} (split, ripple_delete, detach_audio, move_to_lane, remove_silence)"
+        ),
+    })
+}
+
+/// Serve the agent API for `path` on 127.0.0.1:`port`, blocking forever.
+/// Spawn on a thread to run alongside a UI.
+pub fn serve_file_api(path: PathBuf, port: u16) -> Result<()> {
+    let server = Server::http(("127.0.0.1", port))
+        .map_err(|e| anyhow::anyhow!("binding 127.0.0.1:{port}: {e}"))?;
+    println!("agent API on http://127.0.0.1:{port} (project: {})", path.display());
+    let base_dir = path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
+    let store = FileStore { path };
+
+    serve_api(&server, &store, |store, method, url, body| {
+        if (method, url) != (&Method::Post, "/op") {
+            return None;
+        }
+        let result = store.load().and_then(|mut p| {
+            let req: serde_json::Value = serde_json::from_str(body)?;
+            let result = apply_op(&mut p, &req, &base_dir)?;
+            p.validate()?;
+            let op = req["op"].as_str().unwrap_or_default();
+            let id = req["id"].as_str().unwrap_or_default();
+            store.save(&p, &format!("{op} {id} (agent)"))?;
+            Ok(result)
+        });
+        Some(match result {
+            Ok(v) => json_response(200, v.to_string()),
+            Err(e) => error_response(400, &e),
+        })
+    });
     Ok(())
 }
 
@@ -241,28 +336,49 @@ mod tests {
         }
     }
 
-    /// Spawn the server against a fresh temp project file on a dedicated
-    /// port (one per test to avoid cross-test collisions -- each test
-    /// keeps its server thread running for the process lifetime, harmless
-    /// since the whole binary exits once `cargo test` finishes) and wait
-    /// until it's actually accepting connections before returning.
+    /// Spawn the file-backed server against a fresh temp project file on
+    /// a dedicated port (one per test to avoid cross-test collisions --
+    /// each test keeps its server thread running for the process
+    /// lifetime, harmless since the whole binary exits once `cargo test`
+    /// finishes) and wait until it's actually accepting connections
+    /// before returning.
     fn spawn_server(port: u16) -> PathBuf {
+        let path = fresh_project_file(port);
+        let server_path = path.clone();
+        std::thread::spawn(move || {
+            let _ = serve_file_api(server_path, port);
+        });
+        wait_for(port);
+        path
+    }
+
+    /// As `spawn_server`, for the store the headless `serve` bin uses,
+    /// with only the shared routes on top.
+    fn spawn_memory_server(port: u16) -> PathBuf {
+        let path = fresh_project_file(port);
+        let store = MemoryStore::new(test_project(), path.clone());
+        let server = Server::http(("127.0.0.1", port)).expect("bind");
+        std::thread::spawn(move || serve_api(&server, &store, |_, _, _, _| None));
+        wait_for(port);
+        path
+    }
+
+    fn fresh_project_file(port: u16) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("dualcut-api-test-{port}"));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("project.json");
         std::fs::write(&path, test_project().to_json()).unwrap();
-        let server_path = path.clone();
-        std::thread::spawn(move || {
-            let _ = serve_file_api(server_path, port);
-        });
+        path
+    }
+
+    fn wait_for(port: u16) {
         for _ in 0..50 {
             if TcpStream::connect(("127.0.0.1", port)).is_ok() {
                 break;
             }
             std::thread::sleep(std::time::Duration::from_millis(20));
         }
-        path
     }
 
     /// Minimal hand-rolled HTTP/1.1 client -- no test-only dependency
@@ -417,6 +533,74 @@ mod tests {
         let (status, body) = http_with_headers(port, "GET", "/project", &headers, "");
         assert_eq!(status, 403, "response body: {body}");
         assert!(!body.contains("api-test"), "the project must not be disclosed: {body}");
+    }
+
+    /// The contract both servers share, run against the in-memory store.
+    #[test]
+    fn memory_store_answers_the_shared_routes() {
+        let port = 18401;
+        let path = spawn_memory_server(port);
+
+        let (status, body) = http(port, "GET", "/status", "");
+        assert_eq!(status, 200, "response body: {body}");
+        assert!(body.contains(r#""project":"api-test""#));
+
+        let before = std::fs::read_to_string(&path).unwrap();
+        let (status, body) = http(port, "POST", "/project", "{not valid json");
+        assert_eq!(status, 400);
+        assert!(body.contains("error"));
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), before);
+
+        let mut edited = test_project();
+        edited.meta.title = "renamed".into();
+        let (status, _) = http(port, "POST", "/project", &edited.to_json());
+        assert_eq!(status, 200);
+        let on_disk = Project::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.meta.title, "renamed");
+        let (_, body) = http(port, "GET", "/project", "");
+        assert_eq!(Project::from_json(&body).unwrap().meta.title, "renamed");
+
+        let (status, body) = http(port, "GET", "/nope", "");
+        assert_eq!(status, 404);
+        assert!(body.contains("not found"));
+
+        let headers = format!("Host: 127.0.0.1:{port}\r\nOrigin: https://example.com\r\n");
+        let (status, _) =
+            http_with_headers(port, "POST", "/project", &headers, &test_project().to_json());
+        assert_eq!(status, 403);
+        let on_disk = Project::from_json(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        assert_eq!(on_disk.meta.title, "renamed");
+    }
+
+    /// A save that fails (here: the project's directory is gone) answers
+    /// `500` with the envelope, keeps the held project, and the server
+    /// keeps answering. The headless `serve` bin used to exit instead.
+    #[test]
+    fn memory_store_failed_save_returns_500_and_keeps_serving() {
+        let port = 18402;
+        let path = spawn_memory_server(port);
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+
+        let mut edited = test_project();
+        edited.meta.title = "unsaved".into();
+        let (status, body) = http(port, "POST", "/project", &edited.to_json());
+        assert_eq!(status, 500, "response body: {body}");
+        assert!(body.contains(r#""error":"#));
+
+        let (status, body) = http(port, "GET", "/status", "");
+        assert_eq!(status, 200, "server should keep answering: {body}");
+        assert!(body.contains(r#""project":"api-test""#), "held project must not change: {body}");
+    }
+
+    #[test]
+    fn apply_op_runs_without_a_socket() {
+        let mut p = test_project();
+        let req = serde_json::json!({"op": "split", "id": "c1", "at": 1.0});
+        let result = apply_op(&mut p, &req, Path::new(".")).unwrap();
+        assert_eq!(result["ok"], true);
+        assert_eq!(p.scenes[0].layers.len(), 2);
+        let err = apply_op(&mut p, &serde_json::json!({"op": "nope"}), Path::new(".")).unwrap_err();
+        assert!(err.to_string().contains("unknown op"));
     }
 
     #[test]
