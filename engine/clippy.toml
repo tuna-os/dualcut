@@ -1,0 +1,5 @@
+# clippy::too_many_lines is enabled in Cargo.toml [lints.clippy]; CI's
+# `cargo clippy -- -D warnings` turns a new function over this many lines into
+# a failure. Functions already over it carry a baseline allow (#273); delete
+# the allow in the PR that splits the function.
+too-many-lines-threshold = 150

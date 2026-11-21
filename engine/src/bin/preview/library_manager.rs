@@ -98,6 +98,7 @@ impl Editor {
 
     /// Generate any missing media thumbnails off-thread, then refresh the
     /// strip once so they appear.
+    #[allow(clippy::too_many_lines)] // baseline (#273): remove when split
     pub(crate) fn spawn_thumbnail_worker(self: &Rc<Self>, project: &Project, cache: &std::path::Path) {
         let base_dir = self.base_dir();
         let mut thumbs: Vec<String> = Vec::new();

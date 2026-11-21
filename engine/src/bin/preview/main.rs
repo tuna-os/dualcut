@@ -816,6 +816,7 @@ fn show_captions_dialog(editor: &Rc<Editor>) {
 }
 
 
+#[allow(clippy::too_many_lines)] // baseline (#273): remove when split
 fn build_ui(app: &adw::Application) -> Result<()> {
     init()?;
     gstgtk4::plugin_register_static().context("registering gtk4paintablesink")?;
