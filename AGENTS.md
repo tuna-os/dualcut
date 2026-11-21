@@ -41,8 +41,8 @@ The `preview` app serves `/op` but **not** `/render`; the `serve` bin serves
   file is left untouched) · `403` request from a web page (see below) ·
   `404` unknown route (`{"error":"not found"}`) ·
   `500` server error (project file unreadable on a read, or a write/render
-  failed) · `501` feature not compiled in (`/script` on a `serve` bin built
-  without `scripting`).
+  failed; the server keeps running) · `501` feature not compiled in (`/script`
+  on a binary built without `scripting`).
 - A request with an `Origin` header gets `403`. A request with a `Host` name
   other than `localhost` also gets `403`; an IP address is accepted. Thus a web
   page cannot use the API through the browser. curl, scripts and agents send
@@ -76,7 +76,8 @@ Unknown `op` → `400` `{"error":"unknown op \"…\" (split, ripple_delete, deta
 
 ### `/render`  _(serve bin only)_
 `POST /render` — body: `{"out"?: "path.mp4", "profile"?: "mp4"|"webm"}`. `out`
-defaults to `"out/render.mp4"`; `profile` defaults to the value of `out`.
+defaults to `"out/render.mp4"`; `profile` defaults to the value of `out`. An
+empty body takes both defaults; a body that is not JSON → `400`.
 `200` `{"ok":true, "out":"…", "warnings":[…]}`. `500` `{"error":"…"}` if
 rendering fails.
 
@@ -84,15 +85,18 @@ rendering fails.
 `POST /script` — body: TypeScript source,
 `export function edit(p: Project): Project { … }`. Runs in-process, result
 validated, then saved (file-backed) or held in memory (`serve`).
-`200` `{"ok":true}`. `400` `{"error":"…"}` on a script error. On a `serve` bin
-built without the feature → `501` `{"error":"engine built without the scripting feature"}`.
+`200` `{"ok":true}`. `400` `{"error":"…"}` on a script error. `500` if saving
+fails. On a binary built without the feature → `501` `{"error":"engine built without the scripting feature"}`.
 
 ### `/status`
 `GET /status` → `200` `{"engine":"dualcut", "version":"…", "project":"<title>", "duration":<s>, "scenes":<n>}`.
 `500` if the project file can't be read/parsed.
 
-Keep this reference in sync with `engine/src/api.rs` (file-backed) and
-`engine/src/bin/serve.rs` (headless) as operations are added or changed.
+Both servers answer the shared routes (`/project`, `/script`, `/status`, the
+`404`) from one handler, `api::serve_api`, over a `ProjectStore`
+(`FileStore` for the app, `MemoryStore` for `serve`); each adds only its own
+route on top (`/op` via `api::apply_op`, `/render` in `engine/src/bin/serve.rs`).
+Change a shared route there, once, and keep this reference in sync with it.
 
 ## Editing surfaces
 
