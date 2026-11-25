@@ -6,7 +6,7 @@
 //! like any other clip. Live per-frame vector animation (path morphs)
 //! comes later with a real Vello source element.
 
-use crate::document::{parse_color, ShapeKind};
+use crate::document::{parse_color, ShapeKind, MAX_SIDE};
 use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
@@ -157,6 +157,13 @@ pub fn render_shape_rgba(
     height: u32,
     rotate: f64,
 ) -> Result<Vec<u8>> {
+    // Both sizes come from a project document: a shape clip's transform,
+    // the canvas for a mask, or a `vello://` URI. Refuse before either
+    // path allocates. `width * height * 4` bytes is gigabytes for a side
+    // in the tens of thousands, and the product wraps in `u32` above that.
+    if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) {
+        anyhow::bail!("shape size {width}x{height} is outside 1..={MAX_SIDE} pixels per side");
+    }
     if let Some(gpu) = gpu() {
         render_shape_rgba_gpu(gpu, kind, fill_hex, width, height, rotate)
     } else {
@@ -470,9 +477,12 @@ pub fn shape_png_maybe_inverted(
     feather: f64,
     invert: bool,
 ) -> Result<PathBuf> {
+    // The name carries the color that is painted, as `parse_color` reads
+    // it, and never the document's own text. A fill such as
+    // `x/../../name` would otherwise choose the directory of the PNG.
     let file = cache_dir.join(format!(
-        "shape-{kind:?}-{}-{width}x{height}-f{feather}{}.png",
-        fill_hex.trim_start_matches('#'),
+        "shape-{kind:?}-{:08x}-{width}x{height}-f{feather}{}.png",
+        parse_color(fill_hex),
         if invert { "-inv" } else { "" }
     ));
     if file.exists() {
@@ -628,6 +638,51 @@ mod tests {
         assert_eq!(first, second, "identical params should reuse the same cache path");
         assert_eq!(mtime1, mtime2, "second call should not have rewritten the file");
         let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// A size no machine can hold is refused before anything is
+    /// allocated. Without the check the CPU path asks for `w * h * 4`
+    /// bytes (2.2 GB at 24000 square) and indexes out of bounds once
+    /// the product wraps.
+    #[test]
+    fn oversized_and_empty_shapes_are_refused() {
+        let cache = tmp_cache("oversized");
+        let sizes =
+            [(MAX_SIDE + 1, 16), (16, MAX_SIDE + 1), (40_000, 40_000), (u32::MAX, u32::MAX), (0, 16)];
+        for (w, h) in sizes {
+            let err = shape_png(&cache, ShapeKind::Rect, "#ffffff", w, h)
+                .expect_err("a shape outside the size limit must fail")
+                .to_string();
+            assert!(err.contains("outside 1..=8192"), "{w}x{h}: unexpected message: {err}");
+            assert!(render_shape_rgba(ShapeKind::Rect, "#ffffff", w, h, 0.0).is_err());
+        }
+        let wrote_a_file = std::fs::read_dir(&cache).is_ok_and(|mut d| d.next().is_some());
+        assert!(!wrote_a_file, "a refused shape must leave no file behind");
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// The fill is text from the project document. It must not choose
+    /// where the PNG is written, even when the project folder ships a
+    /// cache directory that makes `..` resolve.
+    #[test]
+    fn fill_text_cannot_move_the_cache_file() {
+        let root = tmp_cache("fill-path");
+        let cache = root.join("project").join(".dualcut-cache");
+        std::fs::create_dir_all(cache.join("shape-Rect-x")).unwrap();
+        let png = shape_png(&cache, ShapeKind::Rect, "x/../../../escaped", 8, 8).unwrap();
+        assert_eq!(png.parent(), Some(cache.as_path()), "the PNG must sit in the cache dir");
+        let name = png.file_name().unwrap().to_str().unwrap();
+        assert!(name.chars().all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.'), "{name}");
+        let beside_project: Vec<_> =
+            std::fs::read_dir(&root).unwrap().map(|e| e.unwrap().file_name()).collect();
+        assert_eq!(beside_project, ["project"], "no file may land outside the project folder");
+        // Two spellings of one color share a file; two colors do not.
+        let upper = shape_png(&cache, ShapeKind::Rect, "#FF0000", 8, 8).unwrap();
+        let lower = shape_png(&cache, ShapeKind::Rect, "ff0000", 8, 8).unwrap();
+        let other = shape_png(&cache, ShapeKind::Rect, "#00ff00", 8, 8).unwrap();
+        assert_eq!(upper, lower);
+        assert_ne!(upper, other);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

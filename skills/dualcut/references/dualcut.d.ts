@@ -20,6 +20,7 @@ export interface Project {
 
 export interface Meta {
   title: string;
+  /** Canvas size in pixels; each side is 1 to 8192. */
   width: number;
   height: number;
   fps: number;

@@ -83,6 +83,15 @@ pub struct LaneMeta {
     pub hidden: bool,
 }
 
+/// Longest side, in pixels, of the canvas and of a rasterized shape.
+///
+/// A project file is input from outside: an agent writes it, or the user
+/// downloads it. Without a limit, a file of a few hundred bytes asks for
+/// frames and rasters of several gigabytes. 8192 holds an 8K frame, and
+/// it is the largest texture the Vello path can render to (wgpu's
+/// default limit).
+pub const MAX_SIDE: u32 = 8192;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Meta {
     pub title: String,
