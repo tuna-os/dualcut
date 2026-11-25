@@ -22,11 +22,13 @@
         },
         "width": {
           "type": "integer",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "maximum": 8192
         },
         "height": {
           "type": "integer",
-          "exclusiveMinimum": 0
+          "exclusiveMinimum": 0,
+          "maximum": 8192
         },
         "fps": {
           "type": "integer",

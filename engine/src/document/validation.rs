@@ -1,11 +1,14 @@
 //! Project and clip invariant validation.
 use anyhow::{bail, Result};
 use std::collections::BTreeMap;
-use super::{AnimProperty, Clip, CompDef, Effect, Element, Project};
+use super::{AnimProperty, Clip, CompDef, Effect, Element, Project, MAX_SIDE};
 impl Project {
     pub fn validate(&self) -> Result<()> {
         if self.meta.width <= 0 || self.meta.height <= 0 || self.meta.fps <= 0 {
             bail!("meta.width/height/fps must be positive");
+        }
+        if self.meta.width > MAX_SIDE as i32 || self.meta.height > MAX_SIDE as i32 {
+            bail!("meta.width/height must be at most {MAX_SIDE}");
         }
         let mut ids = std::collections::HashSet::new();
         let mut check = |id: &str, what: &str| -> Result<()> {

@@ -339,6 +339,25 @@ mod tests {
         assert!(p.validate().is_err(), "chromakey angle out of range must fail");
     }
 
+    /// The canvas size reaches every frame and every mask raster, so a
+    /// project must not name one that no machine can hold.
+    #[test]
+    fn validation_bounds_the_canvas() {
+        let mut p = demo();
+        let max = MAX_SIDE as i32;
+        (p.meta.width, p.meta.height) = (max, max);
+        assert!(p.validate().is_ok(), "an 8K canvas must still open");
+        for (w, h) in [(max + 1, 720), (1280, max + 1), (i32::MAX, i32::MAX)] {
+            let mut p = demo();
+            (p.meta.width, p.meta.height) = (w, h);
+            let err = p.validate().expect_err("an oversized canvas must fail").to_string();
+            assert!(err.contains("at most 8192"), "unexpected message: {err}");
+        }
+        let json = demo().to_json().replacen("\"width\": 1280", "\"width\": 2147483647", 1);
+        assert_ne!(json, demo().to_json(), "the demo project's width changed; update this test");
+        assert!(Project::from_json(&json).is_err(), "from_json must refuse it too");
+    }
+
     #[test]
     fn split_rejects_edges_and_unknown() {
         let mut p = demo();
